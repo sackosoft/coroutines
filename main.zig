@@ -14,7 +14,6 @@ pub fn main_async(runtime: *Runtime) Coroutine {
     print("Delaying for 1.0 seconds\n", .{});
     runtime.delay(std.Io.Duration.fromSeconds(1));
     print("Done!\n", .{});
-
     return .{};
 }
 

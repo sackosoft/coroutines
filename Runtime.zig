@@ -64,11 +64,7 @@ pub fn delay(runtime: *Runtime, duration: std.Io.Duration) void {
         print("[before] Task count = {d}\n", .{rt.task_count});
         rt.task_count -= 1;
         print("[after] Task count = {d}\n", .{rt.task_count});
-
-        // TODO: This is not correct, since it does not allow us to resume the caller where post-delay
-        // code gets executed.
-        setjmp.longjmp(&rt.event_loop_point, @intCast(rt.runtime_id));
-        unreachable;
+        return;
     }
 }
 
