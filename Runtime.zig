@@ -96,7 +96,9 @@ pub fn run(runtime: *Runtime, f: *const fn (runtime: *Runtime) Coroutine) !void 
 
 fn get_time_now(runtime: *Runtime) std.Io.Timestamp {
     return std.Io.Timestamp.now(runtime.io, runtime.clock);
-} fn push(runtime: *Runtime, task: Coroutine) !void {
+}
+
+fn push(runtime: *Runtime, task: Coroutine) !void {
     if (runtime.task_count == runtime.tasks.len) {
         return error.TaskQueueExhausted;
     }
