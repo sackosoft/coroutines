@@ -14,6 +14,11 @@ CONTENT = "CONTENT"
 
 BINDINGS = [
     (
+        ROOT / "sys" / "mman.h",
+        ROOT / "sys" / "mman.zig",
+        []
+    ),
+    (
         ROOT / "setjmp.h",
         ROOT / "setjmp.zig",
         []

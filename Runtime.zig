@@ -36,6 +36,9 @@ pub fn run(runtime: *Runtime, f: *const fn (runtime: *Runtime) Task) !void {
     _ = f;
 }
 
+fn step(runtime: *Runtime) !void {
+}
+
 fn get_time_now(runtime: *Runtime) std.Io.Timestamp {
     return std.Io.Timestamp.now(runtime.io, runtime.clock);
 }
