@@ -7,14 +7,14 @@ const print = std.debug.print;
 pub fn main(init: std.process.Init) !void {
     _ = init;
 
-    const stack = try create_coroutine_stack(2);
-    defer destroy_coroutine_stack(stack);
+    const coro_stack = try create_coroutine_stack(2);
+    defer destroy_coroutine_stack(coro_stack);
     print(
         "mmap created a stack at [{p} to {p}] ({d} KiB)\n",
-        .{stack.base, stack.top, @divTrunc(@intFromPtr(stack.top) - @intFromPtr(stack.base), 1024)}
+        .{coro_stack.base, coro_stack.top, @divTrunc(@intFromPtr(coro_stack.top) - @intFromPtr(coro_stack.base), 1024)}
     );
 
-    const coro = init_coroutine(stack, example);
+    const coro = init_coroutine(coro_stack, example);
     print(
         "Coroutine created, in suspended state, sp={p}\n",
         .{coro.sp},
@@ -25,7 +25,7 @@ pub fn main(init: std.process.Init) !void {
 }
 
 fn example() void {
-    print("Hello, world!\n", .{});
+    // print("Hello, world!\n", .{});
 }
 
 const Coroutine = struct {
@@ -41,14 +41,14 @@ const Stack = struct {
 
 pub fn init_coroutine(stack: Stack, f: *const fn() void) Coroutine {
     const ptr = @as([*]u64, @ptrCast(@alignCast(stack.top))) - 8;
-    ptr[7] = 0; // Fake return address, backtrace stopper.
+    ptr[7] = 0;                        // Fake return address, backtrace stopper.
     ptr[6] = @intFromPtr(&trampoline); // ctx_switch()'s `ret` pops this into the instruction pointer %rip
-    ptr[5] = 0; // Becomes %rbp
-    ptr[4] = 0; // Becomes %rbx
-    ptr[3] = 0; // Becomes %r12
-    ptr[2] = @intFromPtr(f); // Becomes %r13
-    ptr[1] = 0; // Becomes %r14
-    ptr[0] = 0; // Becomes %r15
+    ptr[5] = 0;                        // Becomes %rbp
+    ptr[4] = 0;                        // Becomes %rbx
+    ptr[3] = 0;                        // Becomes %r12
+    ptr[2] = @intFromPtr(f);           // Becomes %r13
+    ptr[1] = 0;                        // Becomes %r14
+    ptr[0] = 0;                        // Becomes %r15
 
     return .{
         .stack = stack,
@@ -86,10 +86,19 @@ comptime {
         \\  pushq %rbp      # re-align %rsp to 16 before the call
         \\  movq %r12, %rdi # arg, first argument register
         \\  callq *%r13     # call fn(args)
-        // \\callq coro_exit # must be noreturn
+        \\  callq coro_exit # must be noreturn
     );
 }
 extern fn trampoline() void;
+
+comptime {
+    asm (
+        \\.global coro_exit
+        \\coro_exit:
+        \\  int3
+    );
+}
+extern fn coro_exit() void;
 
 pub fn create_coroutine_stack(requested_pages: u8) !Stack {
     const page_size_bytes: usize = 4096;
@@ -105,6 +114,9 @@ pub fn create_coroutine_stack(requested_pages: u8) !Stack {
     );
 
     if (ptr) |p| {
+        const stack = @as([*]u8, @ptrCast(p))[page_size_bytes..(stack_size_bytes - page_size_bytes)];
+        @memset(stack, 0);
+
         const top_unaligned = @intFromPtr(p) + stack_size_bytes;
         return .{
             .top = @ptrFromInt(top_unaligned - (top_unaligned % 16)),
