@@ -201,3 +201,213 @@ pub fn destroy_coroutine_stack(stack: Stack) void {
 fn errno() i32 {
     return @intCast(std.c._errno().*);
 }
+
+const testing = std.testing;
+
+test "create_coroutine_stack: zero pages is rejected" {
+    try testing.expectError(error.ZeroPageStackRequested, create_coroutine_stack(0));
+}
+
+test "create_coroutine_stack: usable-page contract and alignment" {
+    const page_size_bytes: usize = 4096;
+    const requested_pages: u8 = 2;
+
+    const stack = try create_coroutine_stack(requested_pages);
+    defer destroy_coroutine_stack(stack);
+
+    // Total mapping = 1 guard page + the requested usable pages. The
+    // caller only asked for usable pages; the guard page is an added
+    // implementation detail.
+    try testing.expectEqual(
+        page_size_bytes * (1 + @as(usize, requested_pages)),
+        stack.size,
+    );
+
+    // stack.top sits 16 bytes below the very end of the mapping (the
+    // reserved resume-sp slot), and must itself be 16-byte aligned since
+    // it's used directly as an initial %rsp.
+    const mapping_end = @intFromPtr(stack.base) + stack.size;
+    try testing.expectEqual(mapping_end - 16, @intFromPtr(stack.top));
+    try testing.expectEqual(@as(usize, 0), @intFromPtr(stack.top) % 16);
+
+    // stack.top itself must land inside the usable region, i.e. strictly
+    // above the guard page -- never inside or below it.
+    try testing.expect(@intFromPtr(stack.top) >= @intFromPtr(stack.base) + page_size_bytes);
+}
+
+test "create_coroutine_stack: 1-page stack does not panic (regression)" {
+    // Previously: the guard-page slicing math divided by zero / underflowed
+    // for small page counts and panicked. 1 page is the smallest legal
+    // request now that guard-page bookkeeping is handled internally.
+    const stack = try create_coroutine_stack(1);
+    defer destroy_coroutine_stack(stack);
+    try testing.expect(@intFromPtr(stack.top) > @intFromPtr(stack.base));
+}
+
+test "create_coroutine_stack: usable region is zeroed" {
+    const stack = try create_coroutine_stack(2);
+    defer destroy_coroutine_stack(stack);
+
+    const usable_start: [*]const u8 = @ptrFromInt(@intFromPtr(stack.base) + 4096);
+    const usable_len = stack.size - 4096;
+    for (usable_start[0..usable_len]) |byte| {
+        try testing.expectEqual(@as(u8, 0), byte);
+    }
+}
+
+test "create_coroutine_stack: guard page faults on access" {
+    // The guard page is the first page of the mapping (stack.base). A
+    // coroutine that overflows into it should die immediately rather than
+    // silently corrupt whatever memory sits below its stack. We can't
+    // observe a SIGSEGV in-process without taking the whole test binary
+    // down with it, so fork a child, have it touch the guard page, and
+    // confirm the parent sees it die by signal.
+    const stack = try create_coroutine_stack(1);
+    defer destroy_coroutine_stack(stack);
+
+    const child = std.c.fork();
+    if (child == 0) {
+        // Silence stderr in the child first: Zig's own SIGSEGV handler
+        // will otherwise print a full backtrace to the (shared) test
+        // output before dying, which is harmless but noisy/confusing --
+        // the parent's waitpid status check below is the real assertion.
+        _ = std.c.close(2);
+        const guard_byte: *volatile u8 = @ptrCast(stack.base);
+        guard_byte.* = 1; // must fault; never returns
+        std.c._exit(1); // only reached if the guard page failed to fault
+    }
+    try testing.expect(child > 0);
+
+    var status: c_int = 0;
+    _ = std.c.waitpid(child, &status, 0);
+
+    // FreeBSD/POSIX WIFSIGNALED(status): low 7 bits are the signal number
+    // and are nonzero (0x7f is reserved for stopped processes) when the
+    // child was terminated by a signal rather than exiting normally.
+    const low7 = status & 0x7f;
+    const signaled = low7 != 0 and low7 != 0x7f;
+    try testing.expect(signaled);
+}
+
+// -- init_coroutine -----------------------------------------------------
+
+fn test_noop_fn() void {}
+
+test "init_coroutine: fake register frame is laid out as ctx_switch expects" {
+    const stack = try create_coroutine_stack(2);
+    defer destroy_coroutine_stack(stack);
+
+    const coro = init_coroutine(stack, test_noop_fn);
+
+    // sp sits exactly 8 words (64 bytes) below stack.top, below the
+    // reserved resume-sp slot at stack.top itself.
+    try testing.expectEqual(@intFromPtr(stack.top) - 64, @intFromPtr(coro.sp));
+
+    const words: [*]const u64 = @ptrCast(@alignCast(coro.sp));
+    try testing.expectEqual(@as(u64, 0), words[7]); // fake return address
+    try testing.expectEqual(@intFromPtr(&trampoline), words[6]); // trampoline
+    try testing.expectEqual(@as(u64, 0), words[5]); // %rbp
+    try testing.expectEqual(@as(u64, 0), words[4]); // %rbx
+    try testing.expectEqual(@as(u64, 0), words[3]); // %r12 (fn arg)
+    try testing.expectEqual(@intFromPtr(&test_noop_fn), words[2]); // %r13 (fn)
+    try testing.expectEqual(@as(u64, 0), words[1]); // %r14
+    try testing.expectEqual(@as(u64, 0), words[0]); // %r15
+
+    try testing.expectEqual(@intFromPtr(stack.base), @intFromPtr(coro.stack.base));
+    try testing.expectEqual(stack.size, coro.stack.size);
+}
+
+// -- ctx_switch / coroutine call and return path -------------------------
+
+var test_ran_flag: bool = false;
+
+fn test_sets_flag() void {
+    test_ran_flag = true;
+}
+
+fn resume_coroutine(coro: Coroutine) void {
+    ctx_switch(@ptrCast(@alignCast(coro.stack.top)), coro.sp);
+}
+
+test "coroutine round trip: function body executes and returns control" {
+    test_ran_flag = false;
+
+    const stack = try create_coroutine_stack(2);
+    defer destroy_coroutine_stack(stack);
+    const coro = init_coroutine(stack, test_sets_flag);
+
+    resume_coroutine(coro);
+
+    // If coro_exit's return path were broken, we would never reach this
+    // line at all (segfault) rather than observe a wrong value.
+    try testing.expect(test_ran_flag);
+}
+
+var test_sum_result: u64 = 0;
+
+fn test_computes_sum() void {
+    var sum: u64 = 0;
+    var i: u64 = 0;
+    while (i < 100) : (i += 1) {
+        var buf: [32]u8 = undefined;
+        @memset(&buf, @truncate(i));
+        sum +%= buf[0] +% i;
+    }
+    test_sum_result = sum;
+}
+
+test "coroutine round trip: coroutine can use its own stack and report results" {
+    test_sum_result = 0;
+
+    const stack = try create_coroutine_stack(2);
+    defer destroy_coroutine_stack(stack);
+    const coro = init_coroutine(stack, test_computes_sum);
+
+    resume_coroutine(coro);
+
+    var expected: u64 = 0;
+    var i: u64 = 0;
+    while (i < 100) : (i += 1) {
+        expected +%= i +% i;
+    }
+    try testing.expectEqual(expected, test_sum_result);
+}
+
+var test_a_ran: bool = false;
+var test_b_ran: bool = false;
+
+fn test_a_body() void {
+    test_a_ran = true;
+}
+
+fn test_b_body() void {
+    test_b_ran = true;
+}
+
+test "coroutine round trip: multiple independent coroutines run sequentially" {
+    test_a_ran = false;
+    test_b_ran = false;
+
+    const stack_a = try create_coroutine_stack(2);
+    defer destroy_coroutine_stack(stack_a);
+    const stack_b = try create_coroutine_stack(2);
+    defer destroy_coroutine_stack(stack_b);
+
+    const coro_a = init_coroutine(stack_a, test_a_body);
+    const coro_b = init_coroutine(stack_b, test_b_body);
+
+    resume_coroutine(coro_a);
+    try testing.expect(test_a_ran);
+    try testing.expect(!test_b_ran);
+
+    // Sanity check the scheduler-side stack/registers are intact between
+    // switches -- ordinary computation here shouldn't be disturbed by
+    // whatever ctx_switch/coro_exit did to get back to us.
+    var scratch: u64 = 0;
+    for (0..10) |i| scratch +%= i;
+    try testing.expectEqual(@as(u64, 45), scratch);
+
+    resume_coroutine(coro_b);
+    try testing.expect(test_a_ran);
+    try testing.expect(test_b_ran);
+}
