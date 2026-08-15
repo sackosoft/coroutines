@@ -97,15 +97,15 @@ comptime {
         \\  pushq %r13
         \\  pushq %r14
         \\  pushq %r15
-        \\  movq %rsp, (%rdi) # save current stack pointer
-        \\  movq %rsi, %rsp # adopt the other stack
+        \\  movq %rsp, (%rdi) # *old_sp = %rsp
+        \\  movq %rsi, %rsp   # %rsp = new_sp
         \\  popq %r15
         \\  popq %r14
         \\  popq %r13
         \\  popq %r12
         \\  popq %rbx
         \\  popq %rbp
-        \\  ret # returns into the other coroutine
+        \\  ret # into whatever called ctx_switch on new_sp's stack
     );
 }
 extern fn ctx_switch(old_sp: **anyopaque, new_sp: *anyopaque) void;
@@ -115,8 +115,8 @@ comptime {
         \\.global trampoline
         \\trampoline:
         \\  pushq %rbp      # re-align %rsp to 16 before the call
-        \\  movq %r12, %rdi # arg, first argument register
-        \\  callq *%r13     # call fn(args)
+        \\  movq %r12, %rdi
+        \\  callq *%r13
         \\  jmp coro_exit   # never `ret` out of a coroutine stack
     );
 }
@@ -215,30 +215,25 @@ test "create_coroutine_stack: usable-page contract and alignment" {
     const stack = try create_coroutine_stack(requested_pages);
     defer destroy_coroutine_stack(stack);
 
-    // Total mapping = 1 guard page + the requested usable pages. The
-    // caller only asked for usable pages; the guard page is an added
-    // implementation detail.
+    // stack.size includes the guard page the caller never asked for.
     try testing.expectEqual(
         page_size_bytes * (1 + @as(usize, requested_pages)),
         stack.size,
     );
 
-    // stack.top sits 16 bytes below the very end of the mapping (the
-    // reserved resume-sp slot), and must itself be 16-byte aligned since
-    // it's used directly as an initial %rsp.
+    // stack.top is used directly as an initial %rsp, so it must be
+    // 16-byte aligned, and it sits 16 bytes below the mapping end to
+    // leave room for the resume-sp slot.
     const mapping_end = @intFromPtr(stack.base) + stack.size;
     try testing.expectEqual(mapping_end - 16, @intFromPtr(stack.top));
     try testing.expectEqual(@as(usize, 0), @intFromPtr(stack.top) % 16);
 
-    // stack.top itself must land inside the usable region, i.e. strictly
-    // above the guard page -- never inside or below it.
     try testing.expect(@intFromPtr(stack.top) >= @intFromPtr(stack.base) + page_size_bytes);
 }
 
 test "create_coroutine_stack: 1-page stack does not panic (regression)" {
-    // Previously: the guard-page slicing math divided by zero / underflowed
-    // for small page counts and panicked. 1 page is the smallest legal
-    // request now that guard-page bookkeeping is handled internally.
+    // The guard-page bookkeeping used to underflow for small page counts
+    // and panic; 1 page is now the smallest legal request.
     const stack = try create_coroutine_stack(1);
     defer destroy_coroutine_stack(stack);
     try testing.expect(@intFromPtr(stack.top) > @intFromPtr(stack.base));
@@ -256,21 +251,15 @@ test "create_coroutine_stack: usable region is zeroed" {
 }
 
 test "create_coroutine_stack: guard page faults on access" {
-    // The guard page is the first page of the mapping (stack.base). A
-    // coroutine that overflows into it should die immediately rather than
-    // silently corrupt whatever memory sits below its stack. We can't
-    // observe a SIGSEGV in-process without taking the whole test binary
-    // down with it, so fork a child, have it touch the guard page, and
-    // confirm the parent sees it die by signal.
+    // A SIGSEGV would take the whole test binary down, so fork a child to
+    // touch the guard page (stack.base) and confirm it dies by signal.
     const stack = try create_coroutine_stack(1);
     defer destroy_coroutine_stack(stack);
 
     const child = std.c.fork();
     if (child == 0) {
-        // Silence stderr in the child first: Zig's own SIGSEGV handler
-        // will otherwise print a full backtrace to the (shared) test
-        // output before dying, which is harmless but noisy/confusing --
-        // the parent's waitpid status check below is the real assertion.
+        // Zig's SIGSEGV handler would otherwise dump a backtrace to the
+        // shared test output; the real assertion is the waitpid below.
         _ = std.c.close(2);
         const guard_byte: *volatile u8 = @ptrCast(stack.base);
         guard_byte.* = 1; // must fault; never returns
@@ -289,8 +278,6 @@ test "create_coroutine_stack: guard page faults on access" {
     try testing.expect(signaled);
 }
 
-// -- init_coroutine -----------------------------------------------------
-
 fn test_noop_fn() void {}
 
 test "init_coroutine: fake register frame is laid out as ctx_switch expects" {
@@ -299,8 +286,6 @@ test "init_coroutine: fake register frame is laid out as ctx_switch expects" {
 
     const coro = init_coroutine(stack, test_noop_fn);
 
-    // sp sits exactly 8 words (64 bytes) below stack.top, below the
-    // reserved resume-sp slot at stack.top itself.
     try testing.expectEqual(@intFromPtr(stack.top) - 64, @intFromPtr(coro.sp));
 
     const words: [*]const u64 = @ptrCast(@alignCast(coro.sp));
@@ -316,8 +301,6 @@ test "init_coroutine: fake register frame is laid out as ctx_switch expects" {
     try testing.expectEqual(@intFromPtr(stack.base), @intFromPtr(coro.stack.base));
     try testing.expectEqual(stack.size, coro.stack.size);
 }
-
-// -- ctx_switch / coroutine call and return path -------------------------
 
 var test_ran_flag: bool = false;
 
