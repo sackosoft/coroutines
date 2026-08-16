@@ -27,11 +27,15 @@ pub fn main(init: std.process.Init) !void {
     print("Coroutine returned control to scheduler\n", .{});
     print("resuming...\n", .{});
     coroutine_resume(current_coroutine.?);
-    print("Coroutine returned control to scheduler\n", .{});
+    print("Coroutine returned control to scheduler, outputs: [{d}, {d}]\n", .{outputs[0], outputs[1]});
 }
 
+var outputs: [2]usize = .{0, 0};
+
 fn example() void {
+    outputs[0] = 42;
     coroutine_suspend();
+    outputs[1] = 69;
 }
 
 fn coroutine_suspend() void {
@@ -39,6 +43,7 @@ fn coroutine_suspend() void {
 }
 
 fn coroutine_resume(coro: *Coroutine) void {
+    current_coroutine = coro;
     ctx_switch(@ptrCast(@alignCast(coro.stack.top)), coro.sp);
 }
 
@@ -378,4 +383,122 @@ test "coroutine round trip: multiple independent coroutines run sequentially" {
     resume_coroutine(coro_b);
     try testing.expect(test_a_ran);
     try testing.expect(test_b_ran);
+}
+
+var suspend_test_before: bool = false;
+var suspend_test_after: bool = false;
+
+fn suspend_test_body() void {
+    suspend_test_before = true;
+    coroutine_suspend();
+    suspend_test_after = true;
+}
+
+test "suspend/resume: coroutine stops at suspend point and resumes to completion" {
+    suspend_test_before = false;
+    suspend_test_after = false;
+    current_coroutine = null;
+
+    const stack = try create_coroutine_stack(2);
+    defer destroy_coroutine_stack(stack);
+    var coro = init_coroutine(stack, suspend_test_body);
+
+    current_coroutine = &coro;
+    coroutine_resume(&coro);
+
+    // The coroutine ran up to (but not past) coroutine_suspend(): control
+    // came back to us here instead of falling through to coro_exit.
+    try testing.expect(suspend_test_before);
+    try testing.expect(!suspend_test_after);
+
+    coroutine_resume(&coro);
+
+    // Second resume ran the rest of the body and then fell off the end,
+    // returning control here via coro_exit rather than crashing.
+    try testing.expect(suspend_test_after);
+
+    current_coroutine = null;
+}
+
+var suspend_test_sum: u64 = 0;
+
+fn suspend_test_multi_body() void {
+    suspend_test_sum += 1;
+    coroutine_suspend();
+    suspend_test_sum += 10;
+    coroutine_suspend();
+    suspend_test_sum += 100;
+}
+
+test "suspend/resume: coroutine can suspend multiple times before completing" {
+    suspend_test_sum = 0;
+    current_coroutine = null;
+
+    const stack = try create_coroutine_stack(2);
+    defer destroy_coroutine_stack(stack);
+    var coro = init_coroutine(stack, suspend_test_multi_body);
+
+    current_coroutine = &coro;
+
+    coroutine_resume(&coro);
+    try testing.expectEqual(@as(u64, 1), suspend_test_sum);
+
+    coroutine_resume(&coro);
+    try testing.expectEqual(@as(u64, 11), suspend_test_sum);
+
+    coroutine_resume(&coro);
+    try testing.expectEqual(@as(u64, 111), suspend_test_sum);
+
+    current_coroutine = null;
+}
+
+var suspend_test_x_ran: u32 = 0;
+var suspend_test_y_ran: u32 = 0;
+
+fn suspend_test_x_body() void {
+    suspend_test_x_ran += 1;
+    coroutine_suspend();
+    suspend_test_x_ran += 1;
+}
+
+fn suspend_test_y_body() void {
+    suspend_test_y_ran += 1;
+    coroutine_suspend();
+    suspend_test_y_ran += 1;
+}
+
+test "suspend/resume: two suspended coroutines can be interleaved via current_coroutine" {
+    suspend_test_x_ran = 0;
+    suspend_test_y_ran = 0;
+    current_coroutine = null;
+
+    const stack_x = try create_coroutine_stack(2);
+    defer destroy_coroutine_stack(stack_x);
+    const stack_y = try create_coroutine_stack(2);
+    defer destroy_coroutine_stack(stack_y);
+
+    var coro_x = init_coroutine(stack_x, suspend_test_x_body);
+    var coro_y = init_coroutine(stack_y, suspend_test_y_body);
+
+    current_coroutine = &coro_x;
+    coroutine_resume(&coro_x);
+    try testing.expectEqual(@as(u32, 1), suspend_test_x_ran);
+    try testing.expectEqual(@as(u32, 0), suspend_test_y_ran);
+
+    current_coroutine = &coro_y;
+    coroutine_resume(&coro_y);
+    try testing.expectEqual(@as(u32, 1), suspend_test_x_ran);
+    try testing.expectEqual(@as(u32, 1), suspend_test_y_ran);
+
+    current_coroutine = &coro_x;
+    coroutine_resume(&coro_x);
+    try testing.expectEqual(@as(u32, 2), suspend_test_x_ran);
+    try testing.expectEqual(@as(u32, 1), suspend_test_y_ran);
+
+    current_coroutine = &coro_y;
+    coroutine_resume(&coro_y);
+    try testing.expectEqual(@as(u32, 2), suspend_test_x_ran);
+    try testing.expectEqual(@as(u32, 2), suspend_test_y_ran);
+
+    current_coroutine = null;
 }
