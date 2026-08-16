@@ -20,35 +20,12 @@ pub fn main(init: std.process.Init) !void {
         .{coro.sp},
     );
 
-    // ctx_switch's first move is `movq %rsp, (%rdi)`, so passing the
-    // coroutine's own reserved top-of-stack slot as `old_sp` deposits the
-    // scheduler's resume-sp directly into the coroutine's stack memory --
-    // no global/TLS storage required. coro_exit reads it back out when the
-    // coroutine function returns.
     ctx_switch(@ptrCast(@alignCast(coro.stack.top)), coro.sp);
-
     print("Coroutine returned control to scheduler, example_result={d}\n", .{example_result});
 }
 
-// Note: deliberately not calling std.debug.print (or anything that touches
-// std.Io's stderr locking / terminal detection) from inside the coroutine
-// itself. That path appears to rely on being reached through a normal,
-// unwind-info-bearing call chain -- even a plain indirect `callq` into it
-// from hand-written asm (nothing to do with coroutines/stacks) reliably
-// crashes deep inside std.Io.Threaded's ANSI-detection code. That's a
-// pre-existing hazard of this Zig std revision, orthogonal to the
-// coroutine stack-switching mechanism being exercised here, so we just
-// avoid it inside the coroutine body and report results via plain memory
-// instead, printing from the normal stack once control returns.
-var example_result: u64 = 0;
-
 fn example() void {
-    var sum: u64 = 0;
-    var i: u64 = 0;
-    while (i < 1000) : (i += 1) {
-        sum +%= helper(i);
-    }
-    example_result = sum;
+    suspend();
 }
 
 fn helper(x: u64) u64 {
@@ -121,6 +98,18 @@ comptime {
     );
 }
 extern fn trampoline() void;
+
+// I think I need to do the following:
+// 1. Save register state to the stack,
+// 2. Locate the stack pointer saved on the top of the running stack, context switch out to it.
+comptime  {
+    asm (
+        \\.global suspend
+        \\suspend:
+        \\  nop
+    );
+}
+extern fn suspend() void;
 
 // Reached when a coroutine function returns instead of yielding. There is
 // no valid caller frame left on this stack to `ret` into, so we
