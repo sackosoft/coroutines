@@ -4,6 +4,8 @@ const mman = @import("bindings/sys/mman.zig");
 const assert = std.debug.assert;
 const print = std.debug.print;
 
+var current_coroutine: ?*Coroutine = null;
+
 pub fn main(init: std.process.Init) !void {
     _ = init;
 
@@ -14,24 +16,30 @@ pub fn main(init: std.process.Init) !void {
         .{coro_stack.base, coro_stack.top, @divTrunc(@intFromPtr(coro_stack.top) - @intFromPtr(coro_stack.base), 1024)}
     );
 
-    const coro = init_coroutine(coro_stack, example);
+    var coro = init_coroutine(coro_stack, example);
     print(
         "Coroutine created, in suspended state, sp={p}\n",
         .{coro.sp},
     );
 
+    current_coroutine = &coro;
     ctx_switch(@ptrCast(@alignCast(coro.stack.top)), coro.sp);
-    print("Coroutine returned control to scheduler, example_result={d}\n", .{example_result});
+    print("Coroutine returned control to scheduler\n", .{});
+    print("resuming...\n", .{});
+    coroutine_resume(current_coroutine.?);
+    print("Coroutine returned control to scheduler\n", .{});
 }
 
 fn example() void {
-    suspend();
+    coroutine_suspend();
 }
 
-fn helper(x: u64) u64 {
-    var buf: [64]u8 = undefined;
-    @memset(&buf, @truncate(x));
-    return buf[0] +% x;
+fn coroutine_suspend() void {
+    ctx_switch(&current_coroutine.?.sp, @as(**anyopaque, @ptrCast(@alignCast(current_coroutine.?.stack.top))).*);
+}
+
+fn coroutine_resume(coro: *Coroutine) void {
+    ctx_switch(@ptrCast(@alignCast(coro.stack.top)), coro.sp);
 }
 
 const Coroutine = struct {
@@ -98,18 +106,6 @@ comptime {
     );
 }
 extern fn trampoline() void;
-
-// I think I need to do the following:
-// 1. Save register state to the stack,
-// 2. Locate the stack pointer saved on the top of the running stack, context switch out to it.
-comptime  {
-    asm (
-        \\.global suspend
-        \\suspend:
-        \\  nop
-    );
-}
-extern fn suspend() void;
 
 // Reached when a coroutine function returns instead of yielding. There is
 // no valid caller frame left on this stack to `ret` into, so we
