@@ -32,31 +32,6 @@ const Stack = struct {
         return @ptrCast(head);
     }
 
-    pub fn free(this: *Stack) !void {
-        var ret = mman.madvise(
-            this.vm_base_address,
-            max_stack_size,
-            mman.MADV_FREE
-        );
-
-        if (ret != 0) {
-            // Avoid deep stack frames not getting cleaned up and "leaking"
-            // physical pages of memory that are not used.
-            ret = mman.munmap(this.vm_base_address, max_stack_size);
-            if (ret != 0) {
-                return error.MadvAndMunmapFailed;
-            }
-
-            return;
-        }
-
-        var free_list = this.pool_free_list;
-        var node = try free_list.parent_pool.alloc.create(FreeListNode);
-        node.stack = this.*;
-        node.next = free_list.free_list;
-        free_list.free_list = node;
-        free_list.count += 1;
-    }
 
     /// Returns the max_stack_size-aligned boundary of the highest address of the given
     /// virtual memory mapping.
@@ -75,30 +50,34 @@ const FreeListNode = struct {
 const FreeList = struct {
     count: usize = 0,
     free_list: ?*FreeListNode = null,
-    parent_pool: *StackPool = undefined,
 };
 
 pub const StackPool = struct {
     alloc: std.mem.Allocator,
-    free_lists: [11]FreeList = .{.{}, .{}, .{}, .{}, .{}, .{}, .{}, .{}, .{}, .{}, .{}},
+    free_lists: [11]FreeList = undefined,
 
     pub fn init(alloc: std.mem.Allocator) !*StackPool {
-        var stack_pool = try alloc.create(StackPool);
-        stack_pool.alloc = alloc;
-        for (0..stack_pool.free_lists.len) |i| {
-            stack_pool.free_lists[i].parent_pool = stack_pool;
-        }
-        return stack_pool;
+        const this = try alloc.create(StackPool);
+        this.* = StackPool{
+            .alloc = alloc,
+            .free_lists = .{.{}, .{}, .{}, .{}, .{}, .{}, .{}, .{}, .{}, .{}, .{}},
+        };
+        return this;
     }
 
     pub fn deinit(this: *StackPool) void {
         for (0..this.free_lists.len) |i| {
+            const size_class = std.math.pow(usize, 2, i);
+            const size: usize = system_page_size_bytes * size_class;
             var node = this.free_lists[i].free_list;
-            while (node != null) {
-                const n = node.?;
-                node = n.next;
-                this.alloc.destroy(n);
+            while (node) |cur| {
+                node = cur.next;
+
+                const ret = mman.munmap(cur.stack.vm_base_address, size);
+                assert(ret == 0); // munmap should hopefully never fail
+                this.alloc.destroy(cur);
             }
+            this.free_lists[i].free_list = null;
         }
         this.alloc.destroy(this);
     }
@@ -141,6 +120,32 @@ pub const StackPool = struct {
 
     pub fn reserveStack2MiB(this: *StackPool) !Stack {
         return this.reserve(512);
+    }
+
+    pub fn free(this: *StackPool, stack: *Stack) !void {
+        var ret = mman.madvise(
+            stack.vm_base_address,
+            max_stack_size,
+            mman.MADV_FREE
+        );
+
+        if (ret != 0) {
+            // Avoid deep stack frames not getting cleaned up and "leaking"
+            // physical pages of memory that are not used.
+            ret = mman.munmap(stack.vm_base_address, max_stack_size);
+            if (ret != 0) {
+                return error.MadvAndMunmapFailed;
+            }
+
+            return;
+        }
+
+        var free_list = stack.pool_free_list;
+        var node = try this.alloc.create(FreeListNode);
+        node.stack = stack.*;
+        node.next = free_list.free_list;
+        free_list.free_list = node;
+        free_list.count += 1;
     }
 
     fn reserve(this: *StackPool, usable_stack_pages: u9) !Stack {
