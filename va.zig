@@ -11,6 +11,9 @@ const max_stack_size: usize = 1 << max_stack_base_2_log;
 pub fn main(init: std.process.Init) !void {
     var stack_pool = try StackPool.init(init.gpa);
     defer stack_pool.deinit();
+
+    const stack = try stack_pool.reserveStack4KiB();
+    defer stack_pool.releaseStack(stack);
 }
 
 const StackHeader = struct {
@@ -122,27 +125,17 @@ pub const StackPool = struct {
         return this.reserve(512);
     }
 
-    pub fn free(this: *StackPool, stack: *Stack) !void {
-        var ret = mman.madvise(
+    pub fn releaseStack(this: *StackPool, stack: Stack) !void {
+        const ret = mman.madvise(
             stack.vm_base_address,
             max_stack_size,
-            mman.MADV_FREE
+            mman.MADV_FREE,
         );
-
-        if (ret != 0) {
-            // Avoid deep stack frames not getting cleaned up and "leaking"
-            // physical pages of memory that are not used.
-            ret = mman.munmap(stack.vm_base_address, max_stack_size);
-            if (ret != 0) {
-                return error.MadvAndMunmapFailed;
-            }
-
-            return;
-        }
+        assert(ret == 0);
 
         var free_list = stack.pool_free_list;
         var node = try this.alloc.create(FreeListNode);
-        node.stack = stack.*;
+        node.stack = stack;
         node.next = free_list.free_list;
         free_list.free_list = node;
         free_list.count += 1;
