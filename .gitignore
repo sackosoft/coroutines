@@ -2,5 +2,6 @@ main
 main.core
 va
 va.core
+test.core
 zig-out/
 

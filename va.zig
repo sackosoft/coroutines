@@ -13,8 +13,19 @@ pub fn main(init: std.process.Init) !void {
     defer stack_pool.deinit();
 
     const stack = try stack_pool.reserveStack4KiB();
-    defer stack_pool.releaseStack(stack);
+    const addr1 = @intFromPtr(stack.vm_base_address);
+    stack_pool.releaseStack(stack);
+
+    const stack2 = try stack_pool.reserveStack4KiB();
+    const addr2 = @intFromPtr(stack2.vm_base_address);
+    stack_pool.releaseStack(stack2);
+
+    print("{x} vs. {x}\n", .{addr1, addr2});
+    if (addr1 != addr2) {
+        return error.FailedToReuse;
+    }
 }
+
 
 const StackHeader = struct {
     caller_sp: *anyopaque,
@@ -123,7 +134,7 @@ pub const StackPool = struct {
     }
 
     pub fn releaseStack(this: *StackPool, stack: Stack) void {
-        var free_list = this.free_lists[stack.pool_free_list_index];
+        var free_list = &this.free_lists[stack.pool_free_list_index];
 
         if (free_list.count == free_list.free_stacks.len) {
             const size: usize = system_page_size_bytes * std.math.pow(usize, 2, stack.pool_free_list_index);
@@ -139,9 +150,9 @@ pub const StackPool = struct {
             assert(ret == 0);
         }
 
-        free_list.count += 1;
         for (0..free_list.free_stacks.len) |i| {
             if (free_list.free_stacks[i] == null) {
+                free_list.count += 1;
                 free_list.free_stacks[i] = stack;
                 return;
             }
@@ -153,7 +164,7 @@ pub const StackPool = struct {
     fn reserve(this: *StackPool, pool_index: usize) !Stack {
         assert(pool_index < this.free_lists.len);
 
-        var free_list = this.free_lists[pool_index];
+        var free_list = &this.free_lists[pool_index];
         if (free_list.count > 0) {
             for (0..free_list.free_stacks.len) |i| {
                 if (free_list.free_stacks[i]) |fs| {
@@ -186,7 +197,7 @@ pub const StackPool = struct {
 
         const mmap_base = maybePtr.?;
         const stack_size_bytes: usize = poolIndexToStackPages(pool_index) * system_page_size_bytes;
-        assert(stack_size_bytes < max_stack_size);
+        assert(stack_size_bytes <= max_stack_size);
 
         const bottom_of_usable_stack_pages = @intFromPtr(mmap_base) + (max_stack_size - stack_size_bytes);
         const mprotect_flags = mman.PROT_READ | mman.PROT_WRITE;
@@ -225,3 +236,153 @@ pub const StackPool = struct {
         };
     }
 };
+
+test "stack reuse 4KiB" {
+    var stack_pool = try StackPool.init(std.testing.allocator);
+    defer stack_pool.deinit();
+
+    const stack = try stack_pool.reserveStack4KiB();
+    const addr1 = @intFromPtr(stack.vm_base_address);
+    stack_pool.releaseStack(stack);
+
+    const stack2 = try stack_pool.reserveStack4KiB();
+    const addr2 = @intFromPtr(stack2.vm_base_address);
+    stack_pool.releaseStack(stack2);
+
+    try std.testing.expectEqual(addr1, addr2);
+}
+
+test "stack reuse 8KiB" {
+    var stack_pool = try StackPool.init(std.testing.allocator);
+    defer stack_pool.deinit();
+
+    const stack = try stack_pool.reserveStack8KiB();
+    const addr1 = @intFromPtr(stack.vm_base_address);
+    stack_pool.releaseStack(stack);
+
+    const stack2 = try stack_pool.reserveStack8KiB();
+    const addr2 = @intFromPtr(stack2.vm_base_address);
+    stack_pool.releaseStack(stack2);
+
+    try std.testing.expectEqual(addr1, addr2);
+}
+
+test "stack reuse 16KiB" {
+    var stack_pool = try StackPool.init(std.testing.allocator);
+    defer stack_pool.deinit();
+
+    const stack = try stack_pool.reserveStack16KiB();
+    const addr1 = @intFromPtr(stack.vm_base_address);
+    stack_pool.releaseStack(stack);
+
+    const stack2 = try stack_pool.reserveStack16KiB();
+    const addr2 = @intFromPtr(stack2.vm_base_address);
+    stack_pool.releaseStack(stack2);
+
+    try std.testing.expectEqual(addr1, addr2);
+}
+
+test "stack reuse 32KiB" {
+    var stack_pool = try StackPool.init(std.testing.allocator);
+    defer stack_pool.deinit();
+
+    const stack = try stack_pool.reserveStack32KiB();
+    const addr1 = @intFromPtr(stack.vm_base_address);
+    stack_pool.releaseStack(stack);
+
+    const stack2 = try stack_pool.reserveStack32KiB();
+    const addr2 = @intFromPtr(stack2.vm_base_address);
+    stack_pool.releaseStack(stack2);
+
+    try std.testing.expectEqual(addr1, addr2);
+}
+
+test "stack reuse 64KiB" {
+    var stack_pool = try StackPool.init(std.testing.allocator);
+    defer stack_pool.deinit();
+
+    const stack = try stack_pool.reserveStack64KiB();
+    const addr1 = @intFromPtr(stack.vm_base_address);
+    stack_pool.releaseStack(stack);
+
+    const stack2 = try stack_pool.reserveStack64KiB();
+    const addr2 = @intFromPtr(stack2.vm_base_address);
+    stack_pool.releaseStack(stack2);
+
+    try std.testing.expectEqual(addr1, addr2);
+}
+
+test "stack reuse 128KiB" {
+    var stack_pool = try StackPool.init(std.testing.allocator);
+    defer stack_pool.deinit();
+
+    const stack = try stack_pool.reserveStack128KiB();
+    const addr1 = @intFromPtr(stack.vm_base_address);
+    stack_pool.releaseStack(stack);
+
+    const stack2 = try stack_pool.reserveStack128KiB();
+    const addr2 = @intFromPtr(stack2.vm_base_address);
+    stack_pool.releaseStack(stack2);
+
+    try std.testing.expectEqual(addr1, addr2);
+}
+
+test "stack reuse 256KiB" {
+    var stack_pool = try StackPool.init(std.testing.allocator);
+    defer stack_pool.deinit();
+
+    const stack = try stack_pool.reserveStack256KiB();
+    const addr1 = @intFromPtr(stack.vm_base_address);
+    stack_pool.releaseStack(stack);
+
+    const stack2 = try stack_pool.reserveStack256KiB();
+    const addr2 = @intFromPtr(stack2.vm_base_address);
+    stack_pool.releaseStack(stack2);
+
+    try std.testing.expectEqual(addr1, addr2);
+}
+
+test "stack reuse 512KiB" {
+    var stack_pool = try StackPool.init(std.testing.allocator);
+    defer stack_pool.deinit();
+
+    const stack = try stack_pool.reserveStack512KiB();
+    const addr1 = @intFromPtr(stack.vm_base_address);
+    stack_pool.releaseStack(stack);
+
+    const stack2 = try stack_pool.reserveStack512KiB();
+    const addr2 = @intFromPtr(stack2.vm_base_address);
+    stack_pool.releaseStack(stack2);
+
+    try std.testing.expectEqual(addr1, addr2);
+}
+
+test "stack reuse 1MiB" {
+    var stack_pool = try StackPool.init(std.testing.allocator);
+    defer stack_pool.deinit();
+
+    const stack = try stack_pool.reserveStack1MiB();
+    const addr1 = @intFromPtr(stack.vm_base_address);
+    stack_pool.releaseStack(stack);
+
+    const stack2 = try stack_pool.reserveStack1MiB();
+    const addr2 = @intFromPtr(stack2.vm_base_address);
+    stack_pool.releaseStack(stack2);
+
+    try std.testing.expectEqual(addr1, addr2);
+}
+
+test "stack reuse 2MiB" {
+    var stack_pool = try StackPool.init(std.testing.allocator);
+    defer stack_pool.deinit();
+
+    const stack = try stack_pool.reserveStack2MiB();
+    const addr1 = @intFromPtr(stack.vm_base_address);
+    stack_pool.releaseStack(stack);
+
+    const stack2 = try stack_pool.reserveStack2MiB();
+    const addr2 = @intFromPtr(stack2.vm_base_address);
+    stack_pool.releaseStack(stack2);
+
+    try std.testing.expectEqual(addr1, addr2);
+}
