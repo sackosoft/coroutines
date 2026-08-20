@@ -8,47 +8,27 @@ const system_page_size_bytes: usize = 4096;
 const max_stack_base_2_log: usize = 21;
 const max_stack_size: usize = 1 << max_stack_base_2_log;
 
-pub fn main(init: std.process.Init) !void {
-    var stack_pool = try StackPool.init(init.gpa);
-    defer stack_pool.deinit();
-
-    const stack = try stack_pool.reserveStack4KiB();
-    const addr1 = @intFromPtr(stack.vm_base_address);
-    stack_pool.releaseStack(stack);
-
-    const stack2 = try stack_pool.reserveStack4KiB();
-    const addr2 = @intFromPtr(stack2.vm_base_address);
-    stack_pool.releaseStack(stack2);
-
-    print("{x} vs. {x}\n", .{addr1, addr2});
-    if (addr1 != addr2) {
-        return error.FailedToReuse;
-    }
-}
-
-
 const StackHeader = struct {
-    caller_sp: *anyopaque,
+    caller_stack_pointer: *anyopaque,
 };
 
 const Stack = struct {
     vm_base_address: *anyopaque,
     pool_free_list_index: usize,
 
-    pub fn header(this: *Stack) *StackHeader {
-        const head: [*]StackHeader = @ptrCast(this.ceiling());
-        head -= 1;
-        return @ptrCast(head);
+    pub fn header(this: *const Stack) *StackHeader {
+        const head: [*]StackHeader = @ptrCast(@alignCast(this.ceiling()));
+        return @ptrCast(head - 1);
     }
 
-    pub fn top(this: *Stack) *anyopaque {
+    pub fn top(this: *const Stack) *anyopaque {
         const ceil = @intFromPtr(this.ceiling());
         return @ptrFromInt(ceil - @sizeOf(StackHeader));
     }
 
     /// Returns the max_stack_size-aligned boundary of the highest address of the given
     /// virtual memory mapping.
-    fn ceiling(stack: *Stack) *anyopaque {
+    fn ceiling(stack: *const Stack) *anyopaque {
         const base = @intFromPtr(stack.vm_base_address);
         assert(base % max_stack_size == 0);
         return @ptrFromInt(base + max_stack_size);
@@ -236,6 +216,20 @@ pub const StackPool = struct {
         };
     }
 };
+
+test "stack address functions" {
+    var stack_pool = try StackPool.init(std.testing.allocator);
+    defer stack_pool.deinit();
+
+    for (0..stack_pool.free_lists.len) |i| {
+        const stack = try stack_pool.reserve(i);
+        const ceil = @intFromPtr(stack.ceiling());
+
+        try std.testing.expect(ceil % max_stack_size == 0);
+        try std.testing.expectEqual(ceil - @sizeOf(StackHeader), @intFromPtr(stack.top()));
+        try std.testing.expectEqual(ceil - @sizeOf(StackHeader), @intFromPtr(stack.header()));
+    }
+}
 
 test "stack reuse 4KiB" {
     var stack_pool = try StackPool.init(std.testing.allocator);
