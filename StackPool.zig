@@ -19,7 +19,12 @@ const FreeList = struct {
 };
 
 const StackHeader = struct {
+    // Contains a pointer to a different stack, for when the coroutine is paused or completed
+    // and control need to return to the calling context.
     caller_stack_pointer: *anyopaque,
+
+    // Contains a pointer within the current stack, for resuming the coroutine.
+    saved_stack_pointer: *anyopaque,
 };
 
 pub const Stack = struct {
@@ -44,7 +49,6 @@ pub const Stack = struct {
         return @ptrFromInt(base + max_stack_size);
     }
 };
-
 
 pub fn init(alloc: std.mem.Allocator) !*StackPool {
     const this = try alloc.create(StackPool);
