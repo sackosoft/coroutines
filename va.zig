@@ -12,37 +12,37 @@ const StackHeader = struct {
     caller_stack_pointer: *anyopaque,
 };
 
-const Stack = struct {
+pub const Stack = struct {
     vm_base_address: *anyopaque,
     pool_free_list_index: usize,
 
     pub fn header(this: *const Stack) *StackHeader {
-        const head: [*]StackHeader = @ptrCast(@alignCast(this.ceiling()));
+        const head: [*]StackHeader = @ptrCast(@alignCast(this.vm_top_address()));
         return @ptrCast(head - 1);
     }
 
     pub fn top(this: *const Stack) *anyopaque {
-        const ceil = @intFromPtr(this.ceiling());
+        const ceil = @intFromPtr(this.vm_top_address());
         return @ptrFromInt(ceil - @sizeOf(StackHeader));
     }
 
     /// Returns the max_stack_size-aligned boundary of the highest address of the given
     /// virtual memory mapping.
-    fn ceiling(stack: *const Stack) *anyopaque {
+    fn vm_top_address(stack: *const Stack) *anyopaque {
         const base = @intFromPtr(stack.vm_base_address);
         assert(base % max_stack_size == 0);
         return @ptrFromInt(base + max_stack_size);
     }
 };
 
-const FreeList = struct {
-    count: usize = 0,
-    free_stacks: [1024]?Stack = undefined,
-};
-
 pub const StackPool = struct {
     alloc: std.mem.Allocator,
     free_lists: [10]FreeList = undefined,
+
+    const FreeList = struct {
+        count: usize = 0,
+        free_stacks: [1024]?Stack = undefined,
+    };
 
     pub fn init(alloc: std.mem.Allocator) !*StackPool {
         const this = try alloc.create(StackPool);
@@ -223,7 +223,7 @@ test "stack address functions" {
 
     for (0..stack_pool.free_lists.len) |i| {
         const stack = try stack_pool.reserve(i);
-        const ceil = @intFromPtr(stack.ceiling());
+        const ceil = @intFromPtr(stack.vm_top_address());
 
         try std.testing.expect(ceil % max_stack_size == 0);
         try std.testing.expectEqual(ceil - @sizeOf(StackHeader), @intFromPtr(stack.top()));
