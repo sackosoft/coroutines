@@ -10,6 +10,21 @@ const max_stack_size: usize = 1 << max_stack_base_2_log;
 
 const StackPool = @This();
 
+pub var GlobalPool: StackPool = (struct {
+    fn globalInit() StackPool {
+        var pool = StackPool{
+            .alloc = undefined,
+            .free_lists = .{.{}, .{}, .{}, .{}, .{}, .{}, .{}, .{}, .{}, .{}},
+        };
+
+        for (0 .. pool.free_lists.len) |i| {
+            @memset(pool.free_lists[i].free_stacks[0..], null);
+        }
+
+        return pool;
+    }
+}).globalInit();
+
 alloc: std.mem.Allocator,
 free_lists: [10]FreeList = undefined,
 
