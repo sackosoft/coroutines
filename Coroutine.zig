@@ -42,12 +42,15 @@ pub const Coroutine = struct {
         };
     }
 
-    pub fn coroutine_suspend(coroutine: *Coroutine) void {
+    pub fn yield(coroutine: *Coroutine) void {
+        // TODO: This should be looking for the Coroutine instance based on the current
+        // stack pointer. It should be implicit and not require any parameter or global,
+        // unless we decide tightly couple the runtime/scheduler with the coroutine machinery.
         const header = coroutine.stack.header();
         backend.ctx_switch(&header.saved_stack_pointer, header.caller_stack_pointer);
     }
 
-    pub fn coroutine_resume(coroutine: *Coroutine) void {
+    pub fn enter(coroutine: *Coroutine) void {
         const header = coroutine.stack.header();
         backend.ctx_switch(&header.caller_stack_pointer, header.saved_stack_pointer);
     }
@@ -58,8 +61,17 @@ var test_val: u32 = 0;
 fn setTestVal() void {
     test_val = expected;
 }
-test "coroutine suspend" {
+fn setTestValAfterYield() void {
+    test_val = expected;
+}
+test "coroutine begin has observable side effects and returns to calling stack" {
     var co = try Coroutine.init(setTestVal, .{});
-    co.coroutine_resume();
+    co.enter();
+    try std.testing.expectEqual(expected, test_val);
+}
+
+test "coroutine yielded coroutine has no observabe side effects until restarted" {
+    var co = try Coroutine.init(setTestVal, .{});
+    co.enter();
     try std.testing.expectEqual(expected, test_val);
 }
