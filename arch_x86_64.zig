@@ -1,5 +1,7 @@
-pub fn setupBaseStackFrame(stackTop: *anyopaque, f: *const fn() void) void {
-    const ptr = @as([*]u64, @ptrCast(@alignCast(stackTop))) - 8;
+const Stack = @import("Stack.zig").Stack;
+
+pub fn setupBaseStackFrame(stack: Stack, f: *const fn() void) void {
+    const ptr = @as([*]u64, @ptrCast(@alignCast(stack.top()))) - 8;
 
     ptr[7] = 0;                        // Fake return address, backtrace stopper.
     ptr[6] = @intFromPtr(&trampoline); // ctx_switch()'s `ret` pops this into the instruction pointer %rip
@@ -10,9 +12,11 @@ pub fn setupBaseStackFrame(stackTop: *anyopaque, f: *const fn() void) void {
     ptr[1] = 0;                        // Becomes %r14
     ptr[0] = 0;                        // Becomes %r15
 
-    const header = @as([*]*anyopaque, @ptrCast(@alignCast(stackTop)));
-    header[0] = undefined;     // caller stack pointer, will be set during first `ctx_switch` call.
-    header[1] = @ptrCast(ptr); // saved stack pointer, now initialized with the fake base stack frame.
+    const header = stack.header();
+    header.* = .{
+        .caller_stack_pointer = undefined,    // caller stack pointer, will be set during first `ctx_switch` call.
+        .saved_stack_pointer = @ptrCast(ptr), // saved stack pointer, now initialized with the fake base stack frame.
+    };
 }
 
 comptime {
