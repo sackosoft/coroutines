@@ -1,6 +1,6 @@
-const Stack = @import("Stack.zig").Stack;
+const Stack = @import("Stack.zig");
 
-pub fn setupBaseStackFrame(stack: Stack, f: *const fn() void) void {
+pub fn setupBaseStackFrame(stack: Stack.Stack, f: *const fn() void) void {
     const ptr = @as([*]u64, @ptrCast(@alignCast(stack.top()))) - 8;
 
     ptr[7] = 0;                        // Fake return address, backtrace stopper.
@@ -77,3 +77,15 @@ comptime {
         \\  jmp ctx_switch
     );
 }
+
+comptime {
+    asm (
+        \\.global locate_header
+        \\locate_header:
+        \\  leaq 0x1fffff(%rsp), %rax # rsp + (max_stack_size - 1)
+        \\  andq $~0x1fffff, %rax     # -> vm_top_address (2MiB-aligned ceiling)
+        \\  leaq -16(%rax), %rax      # -> header pointer (vm_top - sizeof(StackHeader))
+        \\  ret
+    );
+}
+pub extern fn locate_header() *Stack.StackHeader;

@@ -5,7 +5,7 @@ const assert = std.debug.assert;
 pub const max_stack_base_2_log: usize = 21;
 pub const max_stack_size: usize = 1 << max_stack_base_2_log;
 
-const StackHeader = struct {
+pub const StackHeader = struct {
     // Contains a pointer to a different stack, for when the coroutine is paused or completed
     // and control need to return to the calling context.
     caller_stack_pointer: *anyopaque,
