@@ -18,11 +18,6 @@ BINDINGS = [
         ROOT / "sys" / "mman.zig",
         []
     ),
-    (
-        ROOT / "setjmp.h",
-        ROOT / "setjmp.zig",
-        []
-    ),
 ]
 
 @dataclass
