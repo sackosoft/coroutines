@@ -33,3 +33,10 @@ and do not write comments that exist purely to visually separate or
 label sections/groups of code (e.g. banner comments introducing "the
 next part" of a file). Prefer expressing structure through naming,
 functions, and file organization instead of comments.
+
+## Markdown formatting
+
+When creating or authoring `.md` files, wrap prose and other raw text at
+approximately 120 characters per line so the source can be read without
+horizontal scrolling. Apply this to new and modified content; avoid
+reflowing unrelated existing content.
