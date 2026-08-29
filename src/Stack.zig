@@ -3,7 +3,6 @@ const std = @import("std");
 const assert = std.debug.assert;
 
 const StackHeader = @import("StackHeader.zig");
-
 const Stack = @This();
 
 pub const max_stack_base_2_log: usize = 21;
