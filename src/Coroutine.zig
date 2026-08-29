@@ -1,5 +1,4 @@
 const std = @import("std");
-const StackPool = @import("StackPool.zig");
 
 const assert = std.debug.assert;
 
@@ -9,7 +8,7 @@ const backend = switch (cpu) {
     else => @compileError("Unsupported target CPU architecture: " + @tagName(cpu)),
 };
 
-const Stack = @import("Stack.zig").Stack;
+const Stack = @import("Stack.zig");
 const Pool = @import("Pool.zig");
 const GlobalPool = &Pool.GlobalPool;
 

@@ -164,17 +164,17 @@ fn reserveInternal(this: *Pool, pool_index: usize) !Stack {
     }
 
     const mmap_base = maybePtr.?;
-    const stack_size_bytes: usize = poolIndexToStackPages(pool_index) * system_page_size_bytes;
-    assert(stack_size_bytes <= Stack.max_stack_size);
+    const usable_stack_size_bytes: usize = poolIndexToStackPages(pool_index) * system_page_size_bytes;
+    assert(usable_stack_size_bytes <= Stack.max_stack_size);
 
-    const bottom_of_usable_stack_pages = @intFromPtr(mmap_base) + (Stack.max_stack_size - stack_size_bytes);
+    const bottom_of_usable_stack_pages = @intFromPtr(mmap_base) + (Stack.max_stack_size - usable_stack_size_bytes);
     const mprotect_flags = mman.PROT_READ | mman.PROT_WRITE;
 
     // Change the protection for the user-specified number of pages at the top of the
     // address range which will act as the "real" usable stack pages.
     const ret = mman.mprotect(
         @ptrFromInt(bottom_of_usable_stack_pages),
-        stack_size_bytes,
+        usable_stack_size_bytes,
         mprotect_flags,
     );
 
@@ -183,7 +183,7 @@ fn reserveInternal(this: *Pool, pool_index: usize) !Stack {
     }
 
     return .{
-        .vm_top_address = @ptrFromInt(@intFromPtr(mmap_base) + stack_size_bytes),
+        .vm_top_address = @ptrFromInt(@intFromPtr(mmap_base) + Stack.max_stack_size),
         .vm_base_address = mmap_base,
         .pool_free_list_index = pool_index,
     };
