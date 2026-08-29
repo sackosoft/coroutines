@@ -4,7 +4,7 @@ const mman = @import("bindings/sys/mman.zig");
 const assert = std.debug.assert;
 const print = std.debug.print;
 
-const system_page_size_bytes: usize = 4096;
+const system_page_size_bytes: usize = std.heap.pageSize();
 const Stack = @import("Stack.zig");
 
 const Pool = @This();
@@ -47,12 +47,10 @@ pub fn init(alloc: std.mem.Allocator) !*Pool {
 
 pub fn deinit(this: *Pool) void {
     for (0..this.free_lists.len) |i| {
-        const size: usize = system_page_size_bytes * std.math.pow(usize, 2, i);
-
         const free_stacks: []?Stack = this.free_lists[i].free_stacks[0..];
         for (free_stacks) |free_stack| {
             if (free_stack) |fs| {
-                const ret = mman.munmap(fs.vm_base_address, size);
+                const ret = mman.munmap(fs.vm_base_address, Stack.max_stack_size);
                 assert(ret == 0); // munmap should hopefully never fail
             }
         }
@@ -105,8 +103,7 @@ pub fn releaseStack(this: *Pool, stack: Stack) void {
     var free_list = &this.free_lists[stack.pool_free_list_index];
 
     if (free_list.count == free_list.free_stacks.len) {
-        const size: usize = system_page_size_bytes * std.math.pow(usize, 2, stack.pool_free_list_index);
-        const ret = mman.munmap(stack.vm_base_address, size);
+        const ret = mman.munmap(stack.vm_base_address, Stack.max_stack_size);
         assert(ret == 0);
         return;
     } else {
@@ -280,6 +277,7 @@ test "stack reuse 64KiB" {
     try std.testing.expectEqual(addr1, addr2);
 }
 
+
 test "stack reuse 128KiB" {
     var stack_pool = try Pool.init(std.testing.allocator);
     defer stack_pool.deinit();
@@ -354,3 +352,27 @@ test "stack reuse 2MiB" {
 
     try std.testing.expectEqual(addr1, addr2);
 }
+
+fn assertNoVirtualMemoryMappingAtAddress(probe: *anyopaque) !void {
+    const result = mman.mprotect(
+        probe,
+        1,
+        mman.PROT_READ | mman.PROT_WRITE,
+    );
+
+    try std.testing.expect(result != 0);
+}
+
+test "when a stack is deallocated, all pages should be munmap'ed" {
+    var pool = try Pool.init(std.testing.allocator);
+    const stack = try pool.reserveStack2MiB();
+    pool.releaseStack(stack);
+    pool.deinit();
+
+    const ptr = @intFromPtr(stack.vm_base_address);
+    for (0..(Stack.max_stack_size / system_page_size_bytes)) |i| {
+        const probe: *anyopaque = @ptrFromInt(ptr + (system_page_size_bytes * i));
+        try assertNoVirtualMemoryMappingAtAddress(probe);
+    }
+}
+
