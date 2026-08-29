@@ -1,6 +1,9 @@
-const Stack = @import("Stack.zig");
+const std = @import("std");
 
-pub fn setupBaseStackFrame(stack: Stack.Stack, f: *const fn() void) void {
+const Stack = @import("Stack.zig");
+const StackHeader = @import("StackHeader.zig");
+
+pub fn setupBaseStackFrame(stack: Stack, f: *const fn() void) void {
     const ptr = @as([*]u64, @ptrCast(@alignCast(stack.top()))) - 8;
 
     ptr[7] = 0;                        // Fake return address, backtrace stopper.
@@ -65,27 +68,37 @@ extern fn trampoline() void;
 // to its value at the call site. So `16(%rsp)` is always stack.top: the
 // resume-sp slot written by ctx_switch when we were resumed. (If
 // trampoline's prologue ever changes, this offset must change with it.)
-comptime {
-    asm (
-        \\.global coro_exit
-        \\coro_exit:
-        \\  leaq 0x1fffff(%rsp), %rax # rsp + (max_stack_size - 1)
-        \\  andq $~0x1fffff, %rax     # -> vm_top_address (2MiB-aligned ceiling)
-        \\  leaq -16(%rax), %rax      # -> header pointer (vm_top - sizeof(StackHeader))
-        \\  leaq 8(%rax), %rdi        # &header.saved_stack_pointer: write target, discarded value
-        \\  movq (%rax), %rsi         # header.caller_stack_pointer: new_sp to resume the caller
-        \\  jmp ctx_switch
-    );
-}
+const _asm_coro_exit = std.fmt.comptimePrint(
+    \\.global coro_exit
+    \\coro_exit:
+    \\  leaq 0x{x:016}(%rsp), %rax
+    \\  andq $~0x{x:016}, %rax
+    \\  leaq -0x{x:016}(%rax), %rax
+    \\  leaq 0x{x:016}(%rax), %rdi
+    \\  movq 0x{x:016}(%rax), %rsi
+    \\  jmp ctx_switch
+    , .{
+        Stack.max_stack_size - 1,
+        Stack.max_stack_size - 1,
+        @sizeOf(StackHeader),
+        @offsetOf(StackHeader, "saved_stack_pointer"),
+        @offsetOf(StackHeader, "caller_stack_pointer"),
+    },
+);
+comptime { asm (_asm_coro_exit); }
 
-comptime {
-    asm (
-        \\.global locate_header
-        \\locate_header:
-        \\  leaq 0x1fffff(%rsp), %rax # rsp + (max_stack_size - 1)
-        \\  andq $~0x1fffff, %rax     # -> vm_top_address (2MiB-aligned ceiling)
-        \\  leaq -16(%rax), %rax      # -> header pointer (vm_top - sizeof(StackHeader))
-        \\  ret
-    );
-}
-pub extern fn locate_header() *Stack.StackHeader;
+const _asm_locate_header = std.fmt.comptimePrint(
+    \\.global locate_header
+    \\locate_header:
+    \\    leaq 0x{x:016}(%rsp), %rax
+    \\    andq $~0x{x:016}, %rax
+    \\    leaq -0x{x:016}(%rax), %rax
+    \\    ret
+    , .{
+        Stack.max_stack_size - 1,
+        Stack.max_stack_size - 1,
+        @sizeOf(StackHeader),
+    },
+);
+comptime { asm (_asm_locate_header); }
+pub extern fn locate_header() *StackHeader;
