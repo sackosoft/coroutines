@@ -5,9 +5,7 @@ const assert = std.debug.assert;
 const print = std.debug.print;
 
 const system_page_size_bytes: usize = 4096;
-const Stack = @import("Stack.zig").Stack;
-const max_stack_base_2_log = @import("Stack.zig").max_stack_base_2_log;
-const max_stack_size = @import("Stack.zig").max_stack_size;
+const Stack = @import("Stack.zig");
 
 const Pool = @This();
 
@@ -114,7 +112,7 @@ pub fn releaseStack(this: *Pool, stack: Stack) void {
     } else {
         const ret = mman.madvise(
             stack.vm_base_address,
-            max_stack_size,
+            Stack.max_stack_size,
             mman.MADV_FREE,
         );
         assert(ret == 0);
@@ -146,7 +144,7 @@ fn reserveInternal(this: *Pool, pool_index: usize) !Stack {
     }
 
     const prot = mman.PROT_NONE;
-    const flags = mman.MAP_ANON | mman.MAP_ALIGNED(max_stack_base_2_log);
+    const flags = mman.MAP_ANON | mman.MAP_ALIGNED(Stack.max_stack_base_2_log);
 
     // Always map virtual memory for the max stack size and align the mapped memory
     // to that max stack size. This way all stack sizes can determine the address of
@@ -154,7 +152,7 @@ fn reserveInternal(this: *Pool, pool_index: usize) !Stack {
     // stack pointer up to the alignment boundary.
     const maybePtr = mman.mmap(
         null,
-        max_stack_size,
+        Stack.max_stack_size,
         prot,
         flags,
         -1,
@@ -167,9 +165,9 @@ fn reserveInternal(this: *Pool, pool_index: usize) !Stack {
 
     const mmap_base = maybePtr.?;
     const stack_size_bytes: usize = poolIndexToStackPages(pool_index) * system_page_size_bytes;
-    assert(stack_size_bytes <= max_stack_size);
+    assert(stack_size_bytes <= Stack.max_stack_size);
 
-    const bottom_of_usable_stack_pages = @intFromPtr(mmap_base) + (max_stack_size - stack_size_bytes);
+    const bottom_of_usable_stack_pages = @intFromPtr(mmap_base) + (Stack.max_stack_size - stack_size_bytes);
     const mprotect_flags = mman.PROT_READ | mman.PROT_WRITE;
 
     // Change the protection for the user-specified number of pages at the top of the
@@ -185,6 +183,7 @@ fn reserveInternal(this: *Pool, pool_index: usize) !Stack {
     }
 
     return .{
+        .vm_top_address = @ptrFromInt(@intFromPtr(mmap_base) + stack_size_bytes),
         .vm_base_address = mmap_base,
         .pool_free_list_index = pool_index,
     };
