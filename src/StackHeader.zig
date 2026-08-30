@@ -1,8 +1,8 @@
 pub const Status = enum (u8) {
     created,
-    ready,
     running,
-    wait,
+    yielded,
+    waiting,
     completed,
 };
 

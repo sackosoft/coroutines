@@ -128,6 +128,7 @@ pub fn releaseStack(this: *Pool, stack: Stack) void {
 
 fn reserveInternal(this: *Pool, pool_index: usize) !Stack {
     assert(pool_index < this.free_lists.len);
+    assert(Stack.max_stack_size % 16 == 0);
 
     var free_list = &this.free_lists[pool_index];
     if (free_list.count > 0) {
@@ -161,6 +162,7 @@ fn reserveInternal(this: *Pool, pool_index: usize) !Stack {
     }
 
     const mmap_base = maybePtr.?;
+    assert(@intFromPtr(mmap_base) % 16 == 0);
     const usable_stack_size_bytes: usize = poolIndexToStackPages(pool_index) * system_page_size_bytes;
     assert(usable_stack_size_bytes <= Stack.max_stack_size);
 

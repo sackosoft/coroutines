@@ -43,11 +43,16 @@ pub const Coroutine = struct {
 
     pub fn yield() void {
         const header = backend.locate_header();
+        assert(header.status == .running);
+        header.status = .yielded;
         backend.ctx_switch(&header.coro_sp, header.ext_sp);
     }
 
     pub fn enter(coroutine: *Coroutine) void {
         const header = coroutine.stack.header();
+        assert(header.status != .completed);
+        assert(header.status != .running);
+        header.status = .running;
         backend.ctx_switch(&header.ext_sp, header.coro_sp);
     }
 };
@@ -80,11 +85,41 @@ test "coroutine yielded coroutine has no observabe side effects until restarted"
     try std.testing.expectEqual(expected, test_val);
 }
 
-fn empty() void {
+var mutexLockThenYieldIo: std.Io = undefined;
+var e1: std.Io.Event = undefined;
+var e2: std.Io.Event = undefined;
+var e3: std.Io.Event = undefined;
+var mutexToCheckIfRunning: std.Io.Mutex = undefined;
+var proceedToTestSignal: std.Io.Condition = undefined;
+fn mutexLockThenYield() void {
+    e2.set(mutexLockThenYieldIo);
+    e1.wait(mutexLockThenYieldIo) catch unreachable;
+    Coroutine.yield();
 }
-test "Coroutine status should be created and completed before and after execution" {
-    var co = try Coroutine.init(empty, .{});
+test "Coroutine should properly track all lifecycle statuses" {
+    mutexLockThenYieldIo = std.testing.io;
+    e1 = .unset;
+    e2 = .unset;
+    e3 = .unset;
+
+    var co = try Coroutine.init(mutexLockThenYield, .{});
     try std.testing.expectEqual(.created, co.stack.header().status);
+
+    const A = struct {
+        fn enterCoroutineInBackground(coroutine: *Coroutine) !void {
+            coroutine.enter();
+            e3.set(mutexLockThenYieldIo);
+        }
+    };
+
+    const t = try std.Thread.spawn(.{}, A.enterCoroutineInBackground, .{&co});
+    try e2.wait(mutexLockThenYieldIo);
+    try std.testing.expectEqual(.running, co.stack.header().status);
+
+    e1.set(mutexLockThenYieldIo);
+    try e3.wait(mutexLockThenYieldIo);
+    try std.testing.expectEqual(.yielded, co.stack.header().status);
+    std.Thread.join(t);
 
     co.enter();
     try std.testing.expectEqual(.completed, co.stack.header().status);
