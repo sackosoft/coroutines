@@ -353,14 +353,15 @@ test "stack reuse 2MiB" {
     try std.testing.expectEqual(addr1, addr2);
 }
 
-fn assertNoVirtualMemoryMappingAtAddress(probe: *anyopaque) !void {
-    const result = mman.mprotect(
+fn assertAddressNotMapped(probe: *anyopaque) !void {
+    var state: u8 = undefined;
+    const result = mman.mincore(
         probe,
-        1,
-        mman.PROT_READ | mman.PROT_WRITE,
+        system_page_size_bytes,
+        @ptrCast(&state)
     );
-
     try std.testing.expect(result != 0);
+    try std.testing.expectEqual(@intFromEnum(std.c.E.NOMEM), std.c._errno().*);
 }
 
 test "when a stack is deallocated, all pages should be munmap'ed" {
@@ -372,7 +373,7 @@ test "when a stack is deallocated, all pages should be munmap'ed" {
     const ptr = @intFromPtr(stack.vm_base_address);
     for (0..(Stack.max_stack_size / system_page_size_bytes)) |i| {
         const probe: *anyopaque = @ptrFromInt(ptr + (system_page_size_bytes * i));
-        try assertNoVirtualMemoryMappingAtAddress(probe);
+        try assertAddressNotMapped(probe);
     }
 }
 
