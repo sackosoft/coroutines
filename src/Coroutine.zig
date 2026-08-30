@@ -80,3 +80,12 @@ test "coroutine yielded coroutine has no observabe side effects until restarted"
     try std.testing.expectEqual(expected, test_val);
 }
 
+fn empty() void {
+}
+test "Coroutine status should be created and completed before and after execution" {
+    var co = try Coroutine.init(empty, .{});
+    try std.testing.expectEqual(.created, co.stack.header().status);
+
+    co.enter();
+    try std.testing.expectEqual(.completed, co.stack.header().status);
+}

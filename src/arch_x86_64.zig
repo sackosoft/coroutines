@@ -17,8 +17,9 @@ pub fn setupBaseStackFrame(stack: Stack, f: *const fn() void) void {
 
     const header = stack.header();
     header.* = .{
-        .ext_sp = undefined,    // caller stack pointer, will be set during first `ctx_switch` call.
+        .ext_sp = undefined,      // caller stack pointer, will be set during first `ctx_switch` call.
         .coro_sp = @ptrCast(ptr), // saved stack pointer, now initialized with the fake base stack frame.
+        .status = .created,
     };
 }
 
@@ -85,6 +86,7 @@ const _asm_coro_exit = std.fmt.comptimePrint(
     \\  leaq -0x{x:016}(%rax), %rax
     \\  leaq 0x{x:016}(%rax), %rdi
     \\  movq 0x{x:016}(%rax), %rsi
+    \\  movb $0x{x:02}, 0x{x:016}(%rax)
     \\  jmp ctx_switch
     , .{
         Stack.max_stack_size - 1,
@@ -92,6 +94,8 @@ const _asm_coro_exit = std.fmt.comptimePrint(
         @sizeOf(StackHeader),
         @offsetOf(StackHeader, "coro_sp"),
         @offsetOf(StackHeader, "ext_sp"),
+        @intFromEnum(StackHeader.Status.completed),
+        @offsetOf(StackHeader, "status"),
     },
 );
 comptime { asm (_asm_coro_exit); }
