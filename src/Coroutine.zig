@@ -43,12 +43,12 @@ pub const Coroutine = struct {
 
     pub fn yield() void {
         const header = backend.locate_header();
-        backend.ctx_switch(&header.saved_stack_pointer, header.caller_stack_pointer);
+        backend.ctx_switch(&header.coro_sp, header.ext_sp);
     }
 
     pub fn enter(coroutine: *Coroutine) void {
         const header = coroutine.stack.header();
-        backend.ctx_switch(&header.caller_stack_pointer, header.saved_stack_pointer);
+        backend.ctx_switch(&header.ext_sp, header.coro_sp);
     }
 };
 

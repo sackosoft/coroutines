@@ -156,8 +156,8 @@ fn reserveInternal(this: *Pool, pool_index: usize) !Stack {
         0,
     );
 
-    if (maybePtr == null) {
-        return error.VirtualMemoryAllocate;
+    if (maybePtr == mman.MAP_FAILED or maybePtr == null) {
+        return error.UnableToMapVirtualMemory;
     }
 
     const mmap_base = maybePtr.?;
@@ -169,14 +169,16 @@ fn reserveInternal(this: *Pool, pool_index: usize) !Stack {
 
     // Change the protection for the user-specified number of pages at the top of the
     // address range which will act as the "real" usable stack pages.
-    const ret = mman.mprotect(
+    var ret = mman.mprotect(
         @ptrFromInt(bottom_of_usable_stack_pages),
         usable_stack_size_bytes,
         mprotect_flags,
     );
 
     if (ret != 0) {
-        return error.VirtualMemoryProtect;
+        ret = mman.munmap(mmap_base, Stack.max_stack_size);
+        assert(ret == 0);
+        return error.UnableToProtectVirtualMemory;
     }
 
     return .{

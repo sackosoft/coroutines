@@ -17,8 +17,8 @@ pub fn setupBaseStackFrame(stack: Stack, f: *const fn() void) void {
 
     const header = stack.header();
     header.* = .{
-        .caller_stack_pointer = undefined,    // caller stack pointer, will be set during first `ctx_switch` call.
-        .saved_stack_pointer = @ptrCast(ptr), // saved stack pointer, now initialized with the fake base stack frame.
+        .ext_sp = undefined,    // caller stack pointer, will be set during first `ctx_switch` call.
+        .coro_sp = @ptrCast(ptr), // saved stack pointer, now initialized with the fake base stack frame.
     };
 }
 
@@ -90,8 +90,8 @@ const _asm_coro_exit = std.fmt.comptimePrint(
         Stack.max_stack_size - 1,
         Stack.max_stack_size - 1,
         @sizeOf(StackHeader),
-        @offsetOf(StackHeader, "saved_stack_pointer"),
-        @offsetOf(StackHeader, "caller_stack_pointer"),
+        @offsetOf(StackHeader, "coro_sp"),
+        @offsetOf(StackHeader, "ext_sp"),
     },
 );
 comptime { asm (_asm_coro_exit); }
