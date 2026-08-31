@@ -5,10 +5,10 @@ const assert = std.debug.assert;
 const cpu = @import("builtin").target.cpu.arch;
 const backend = switch (cpu) {
     .x86_64 => @import("arch_x86_64.zig"),
-    else => @compileError("Unsupported target CPU architecture: " + @tagName(cpu)),
+    else => @compileError("Unsupported target CPU architecture: " ++ @tagName(cpu)),
 };
-
 const Stack = @import("Stack.zig");
+
 
 pub const StackSize = enum { KiB_4, KiB_8, KiB_16, KiB_32, KiB_64, KiB_128, KiB_256, KiB_512, MiB_1, MiB_2 };
 pub const CoroutineOptions = struct {
