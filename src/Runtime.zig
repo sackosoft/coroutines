@@ -9,7 +9,6 @@ const Runtime = @This();
 
 const queue_service_limit: usize = 1000;
 
-wait_queue: IntrusiveStackList = .{},
 ready_queue: IntrusiveStackList = .{},
 
 fn spawn(rt: *Runtime) void {
@@ -21,36 +20,6 @@ fn run(rt: *Runtime) void {
 }
 
 fn step(rt: *Runtime) void {
-    // Shove all completed waits into the ready queue.
-    // TODO: Thinking this through a bit more, we don't even need to track the tasks that are in waiting state. They can be
-    // registered as user-data in kernel/operating system wait mechanisms so that we directly update their status and
-    // put them in the ready queue in an on-demand fashion when we get those notifications from the OS/kernel.
-    if (rt.wait_queue.head) |head| {
-        var p: ?Stack = head;
-        while (p != null) {
-            // Must be computed ahead of time since we reorganize the links on `p` if it moves to the ready queue.
-            const next: ?Stack = if (p.?.header().next) |n| Stack{.vm_base_address = n} else null;
-            defer p = next;
-            {
-                const stack = p.?;
-                const header = stack.header();
-                assert(header.status == .waiting);
-                if (header.wait_done) {
-                    rt.wait_queue.remove(stack);
-                    header.status = .yielded;
-                    rt.ready_queue.append_back(stack);
-                }
-            }
-        }
-    }
-
-    // TODO: I've realized that I'm assuming that a given stack will appear at most once in all ready and wait queues.
-    // This makes me think that I should have an assertion here which scans through both looking for duplicates. I can't
-    // imagine any case where two references to the same stack would be valid (two across both queues definitely not,
-    // and two references within the same queue also seems wrong and impossible). That expensive validation should
-    // definitely be optimized out in non-debug builds.
-    assert(true);
-
     // Each turn we take working on the ready queue will consume at most the coroutines in the queue before we start.
     // Because coroutines we work on can trigger new items to be added to the back of the queue, we could end up in an
     // infinite loop, which is not what we want. We need to be able to break out and do the other book keeping work
