@@ -38,3 +38,11 @@ status: Status,
 /// since the nullable pointer type is part of the Zig ABI which has no guaranteed
 /// representation or stability.
 next: ?*anyopaque = null,
+
+/// Used by schedulers or other external runtimes to create an intrusive doubly linked
+/// list of stacks, instead of allocating and managing data structures separately.
+/// Note: this field is meant to be managed 100% by higher level users of the library,
+/// it should NOT be interacted with by the backend architecture or assembly machinery
+/// since the nullable pointer type is part of the Zig ABI which has no guaranteed
+/// representation or stability.
+prev: ?*anyopaque = null,
