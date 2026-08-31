@@ -13,6 +13,7 @@ wait_queue: IntrusiveStackList = .{},
 ready_queue: IntrusiveStackList = .{},
 
 fn step(rt: *Runtime) void {
+    // Shove all completed waits into the ready queue.
     if (rt.wait_queue.head) |head| {
         var p: ?Stack = head;
         while (p != null) : (p = if (p.?.header().next) |n| Stack{.vm_base_address = n} else null) {
@@ -23,24 +24,6 @@ fn step(rt: *Runtime) void {
                 rt.wait_queue.remove(stack);
                 rt.ready_queue.append_back(stack);
             }
-        }
-    }
-
-    // Shove all completed waits into the ready queue.
-    while(true) {
-        // TODO: Now we have doubly linked, so we can scan through the list and pluck out completed work. Rewrite this logic.
-        var stack: Stack = undefined;
-        if (!rt.wait_queue.try_pop_front(&stack)) {
-            break;
-        }
-
-        const header = stack.header();
-        assert(header.status == .waiting);
-        if (header.wait_done) {
-            if (rt.ready_queue) |s| {
-                header.next = s.vm_base_address;
-            }
-            rt.ready_queue = stack;
         }
     }
 
