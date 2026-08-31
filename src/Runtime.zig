@@ -7,14 +7,30 @@ const Stack = @import("Stack.zig");
 
 const Runtime = @This();
 
-wait_queue: ?Stack = undefined,
-ready_queue: ?Stack = undefined,
+const queue_service_limit: usize = 1000;
+
+wait_queue: IntrusiveStackList = .{},
+ready_queue: IntrusiveStackList = .{},
 
 fn step(rt: *Runtime) void {
+    if (rt.wait_queue.head) |head| {
+        var p: ?Stack = head;
+        while (p != null) : (p = if (p.?.header().next) |n| Stack{.vm_base_address = n} else null) {
+            const stack = p.?;
+            const header = stack.header();
+            assert(header.status == .waiting);
+            if (header.wait_done) {
+                rt.wait_queue.remove(stack);
+                rt.ready_queue.append_back(stack);
+            }
+        }
+    }
+
     // Shove all completed waits into the ready queue.
     while(true) {
+        // TODO: Now we have doubly linked, so we can scan through the list and pluck out completed work. Rewrite this logic.
         var stack: Stack = undefined;
-        if (!pop_front(&rt.wait_queue, &stack)) {
+        if (!rt.wait_queue.try_pop_front(&stack)) {
             break;
         }
 
@@ -28,34 +44,39 @@ fn step(rt: *Runtime) void {
         }
     }
 
-    // TODO: This can be an infinite loop which I'm not 100% sure I want. I think it makes
-    // more sense to either do individual operations or run through each list no more than
-    // once. Especially the ready_queue which can both enter a coroutine, then put it on
-    // the back of the ready_queuew when it yields, then pick it up later and run again.
-    // The whole runtime should be doing that, but I think that a `step()` should not. It
-    // needs a chance to check again for completions in the wait_queue.
-    while (true) {
+    // TODO: I've realized that I'm assuming that a given stack will appear at most once in all ready and wait queues.
+    // This makes me think that I should have an assertion here which scans through both looking for duplicates. I can't
+    // imagine any case where two references to the same stack would be valid (two across both queues definitely not,
+    // and two references within the same queue also seems wrong and impossible). That expensive validation should
+    // definitely be optimized out in non-debug builds.
+    assert(true);
+
+    // Each turn we take working on the ready queue will consume at most the coroutines in the queue before we start.
+    // Because coroutines we work on can trigger new items to be added to the back of the queue, we could end up in an
+    // infinite loop, which is not what we want. We need to be able to break out and do the other book keeping work
+    // like checking for completed items in the wait queue before taking another turn in the ready queue. We will also
+    // bound the number of serviced items to a fixed count.
+    if (rt.ready_queue.tail) |end| {
         var stack: Stack = undefined;
-        if (!pop_front(&rt.ready_queue, &stack)) {
-            break;
-        }
+        for (0..queue_service_limit) |_| {
+            if(!rt.ready_queue.try_pop_front(&stack) or stack.vm_base_address == end.vm_base_address) {
+                break;
+            }
 
-        const header = stack.header();
-        assert(header.status != .completed);
-        assert(header.status != .running);
-        Coroutine.enter2(stack);
+            const header = stack.header();
+            assert(header.status != .completed);
+            assert(header.status != .running);
 
-        switch (header.status) {
-            .created => unreachable,
-            .running => unreachable,
-            .yielded => append_back(&rt.ready_queue, stack),
-            .waiting => append_back(&rt.wait_queue, stack),
-            .completed => continue,
+            switch (Coroutine.enter2(stack)) {
+                .created => unreachable,
+                .running => unreachable,
+                .yielded => rt.ready_queue.append_back(stack),
+                .waiting => rt.wait_queue.append_back(stack),
+                .completed => continue,
+            }
         }
     }
 }
-fn pop_front(a: *?Stack, b: *Stack) bool { _ = a; _ = b; return false; }
-fn append_back(a: *?Stack, b: Stack) void { _ = a; _ = b; }
 
 const IntrusiveStackList = struct {
     head: ?Stack = null,
@@ -65,7 +86,6 @@ const IntrusiveStackList = struct {
         const head_null = this.head == null;
         assert(head_null == (this.tail == null));
         if (head_null) {
-            assert(this.tail == null);
             return false;
         } else if (this.head.?.vm_base_address == this.tail.?.vm_base_address) {
             const removed =  this.head.?;
@@ -78,9 +98,37 @@ const IntrusiveStackList = struct {
         } else {
             const removed = this.head.?;
             assert(removed.header().next != null);
+            assert(removed.header().prev == null);
             const new_head: Stack = .{ .vm_base_address = removed.header().next.? };
             new_head.header().prev = null;
             this.head = new_head;
+            removed.header().prev = null;
+            removed.header().next = null;
+            result.* = removed;
+            return true;
+        }
+    }
+
+    fn try_pop_back(this: *IntrusiveStackList, result: *Stack) bool {
+        const tail_null = this.tail == null;
+        assert(tail_null == (this.head == null));
+        if (tail_null) {
+            return false;
+        } else if (this.tail.?.vm_base_address == this.head.?.vm_base_address) {
+            const removed =  this.tail.?;
+            assert(removed.header().prev == null);
+            assert(removed.header().next == null);
+            this.head = null;
+            this.tail = null;
+            result.* = removed;
+            return true;
+        } else {
+            const removed = this.tail.?;
+            assert(removed.header().next == null);
+            assert(removed.header().prev != null);
+            const new_tail: Stack = .{ .vm_base_address = removed.header().prev.? };
+            new_tail.header().next = null;
+            this.tail = new_tail;
             removed.header().prev = null;
             removed.header().next = null;
             result.* = removed;
@@ -102,6 +150,35 @@ const IntrusiveStackList = struct {
             item.header().prev = tail.vm_base_address;
             item.header().next = null;
             this.tail = item;
+        }
+    }
+
+    fn remove(this: *IntrusiveStackList, item: Stack) void {
+        if (this.head != null and this.head.?.vm_base_address == item.vm_base_address) {
+            var s: Stack = undefined;
+            const success = this.try_pop_front(&s);
+            assert(success);
+            assert(s.vm_base_address == item.vm_base_address);
+        } else if (this.tail != null and this.tail.?.vm_base_address == item.vm_base_address) {
+            var s: Stack = undefined;
+            const success = this.try_pop_back(&s);
+            assert(success);
+            assert(s.vm_base_address == item.vm_base_address);
+        } else {
+            // TODO: Assert the item is actually somewhere in the middle of this instance and not some other instance.
+            // That would be a strange violation of my assumptions.
+            // TODO: Assert that the item is not a head or tail based on the pointers in the header. That would also
+            // be a strange violation of my assumptions.
+            const prev = item.header().prev;
+            const next = item.header().next;
+            assert(prev != null);
+            assert(next != null);
+            const prev_header = (Stack{.vm_base_address = prev.?}).header();
+            const next_header = (Stack{.vm_base_address = next.?}).header();
+            prev_header.next = next.?;
+            next_header.prev = prev.?;
+            item.header().next = null;
+            item.header().prev = null;
         }
     }
 };
@@ -164,5 +241,52 @@ test "IntrusiveStackList operations and edge cases" {
     try std.testing.expect(list.try_pop_front(&result));
     try std.testing.expectEqual(s3, result);
     try std.testing.expect(!list.try_pop_front(&result));
+    try std.testing.expectEqual(s3, result); // Unchanged
+    try std.testing.expect(list.head == null);
+    try std.testing.expect(list.tail == null);
+
+    list.append_back(s1);
+    list.append_back(s2);
+    list.append_back(s3);
+    try std.testing.expect(list.try_pop_back(&result));
     try std.testing.expectEqual(s3, result);
+    try std.testing.expect(list.try_pop_back(&result));
+    try std.testing.expectEqual(s2, result);
+    try std.testing.expect(list.try_pop_back(&result));
+    try std.testing.expectEqual(s1, result);
+    try std.testing.expect(!list.try_pop_back(&result));
+    try std.testing.expectEqual(s1, result); // Unchanged
+    try std.testing.expect(list.head == null);
+    try std.testing.expect(list.tail == null);
+
+    list.append_back(s1);
+    list.append_back(s2);
+    list.append_back(s3);
+    list.remove(s2);
+    try std.testing.expect(s2.header().next == null);
+    try std.testing.expect(s2.header().prev == null);
+    try std.testing.expect(list.head != null);
+    try std.testing.expect(list.tail != null);
+    try std.testing.expectEqual(s1, list.head.?);
+    try std.testing.expectEqual(s3, list.tail.?);
+    try std.testing.expect(s1.header().prev == null);
+    try std.testing.expect(s1.header().next != null);
+    try std.testing.expectEqual(s1.header().next.?, s3.vm_base_address);
+    try std.testing.expect(s3.header().next == null);
+    try std.testing.expect(s3.header().prev != null);
+    try std.testing.expectEqual(s3.header().prev.?, s1.vm_base_address);
+
+    list.remove(s3);
+    try std.testing.expect(s3.header().next == null);
+    try std.testing.expect(s3.header().prev == null);
+    try std.testing.expect(list.head != null);
+    try std.testing.expect(list.tail != null);
+    try std.testing.expectEqual(s1, list.head.?);
+    try std.testing.expectEqual(s1, list.tail.?);
+
+    list.remove(s1);
+    try std.testing.expect(s1.header().next == null);
+    try std.testing.expect(s1.header().prev == null);
+    try std.testing.expect(list.head == null);
+    try std.testing.expect(list.tail == null);
 }
