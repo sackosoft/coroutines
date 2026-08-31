@@ -44,7 +44,8 @@ pub fn yield() void {
     const header = backend.locate_header();
     assert(header.status == .running);
     header.status = .yielded;
-    backend.ctx_switch(&header.coro_sp, header.ext_sp);
+    assert(header.ext_sp != null);
+    backend.ctx_switch(&header.coro_sp, &header.ext_sp);
 }
 
 pub fn enter(coroutine: *Coroutine) void {
@@ -52,7 +53,9 @@ pub fn enter(coroutine: *Coroutine) void {
     assert(header.status != .completed);
     assert(header.status != .running);
     header.status = .running;
-    backend.ctx_switch(&header.ext_sp, header.coro_sp);
+    assert(header.ext_sp == null);
+    assert(header.coro_sp != null);
+    backend.ctx_switch(&header.ext_sp, &header.coro_sp);
 }
 
 pub fn enter2(stack: Stack) StackHeader.Status {
@@ -61,7 +64,9 @@ pub fn enter2(stack: Stack) StackHeader.Status {
     assert(header.status != .completed);
     assert(header.status != .waiting);
     header.status = .running;
-    backend.ctx_switch(&header.ext_sp, header.coro_sp);
+    assert(header.ext_sp == null);
+    assert(header.coro_sp != null);
+    backend.ctx_switch(&header.ext_sp, &header.coro_sp);
     assert(header.status != .running);
     assert(header.status != .created);
     return header.status;
@@ -133,4 +138,20 @@ test "Coroutine should properly track all lifecycle statuses" {
 
     co.enter();
     try std.testing.expectEqual(.completed, co.stack.header().status);
+}
+
+fn empty() void {
+}
+test "Coroutines should manage ext_sp and coro_sp as optional pointers" {
+    var co = try Coroutine.init(empty, .{});
+    try std.testing.expect(co.stack.header().ext_sp == null);
+    try std.testing.expect(co.stack.header().coro_sp != null);
+    const coro_sp = @intFromPtr(co.stack.header().coro_sp.?);
+    try std.testing.expect(coro_sp > @intFromPtr(co.stack.vm_base_address));
+    try std.testing.expect(coro_sp < (@intFromPtr(co.stack.vm_base_address) + Stack.max_stack_size));
+
+    const actual = Coroutine.enter2(co.stack);
+    try std.testing.expectEqual(.completed, actual);
+    try std.testing.expect(co.stack.header().ext_sp == null);
+    try std.testing.expect(co.stack.header().coro_sp == null);
 }
