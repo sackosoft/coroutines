@@ -9,7 +9,6 @@ const backend = switch (cpu) {
 };
 const Stack = @import("Stack.zig");
 
-
 pub const StackSize = enum { KiB_4, KiB_8, KiB_16, KiB_32, KiB_64, KiB_128, KiB_256, KiB_512, MiB_1, MiB_2 };
 pub const CoroutineOptions = struct {
     stack_size: StackSize = .KiB_8,
@@ -49,6 +48,14 @@ pub fn yield() void {
 
 pub fn enter(coroutine: *Coroutine) void {
     const header = coroutine.stack.header();
+    assert(header.status != .completed);
+    assert(header.status != .running);
+    header.status = .running;
+    backend.ctx_switch(&header.ext_sp, header.coro_sp);
+}
+
+pub fn enter2(stack: Stack) void {
+    const header = stack.header();
     assert(header.status != .completed);
     assert(header.status != .running);
     header.status = .running;
