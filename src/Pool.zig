@@ -184,7 +184,6 @@ fn reserveInternal(this: *Pool, pool_index: usize) !Stack {
     }
 
     return .{
-        .vm_top_address = @ptrFromInt(@intFromPtr(mmap_base) + Stack.max_stack_size),
         .vm_base_address = mmap_base,
         .pool_free_list_index = pool_index,
     };

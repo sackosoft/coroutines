@@ -17,45 +17,45 @@ pub const CoroutineOptions = struct {
     stack_size: StackSize = .KiB_8,
 };
 
-pub const Coroutine = struct {
-    stack: Stack,
+pub const Coroutine = @This();
 
-    pub fn init(f: *const fn() void, options: CoroutineOptions) !Coroutine {
-        const stack = try switch (options.stack_size) {
-            .KiB_4 => GlobalPool.reserveStack4KiB(),
-            .KiB_8 => GlobalPool.reserveStack8KiB(),
-            .KiB_16 => GlobalPool.reserveStack16KiB(),
-            .KiB_32 => GlobalPool.reserveStack32KiB(),
-            .KiB_64 => GlobalPool.reserveStack64KiB(),
-            .KiB_128 => GlobalPool.reserveStack128KiB(),
-            .KiB_256 => GlobalPool.reserveStack256KiB(),
-            .KiB_512 => GlobalPool.reserveStack512KiB(),
-            .MiB_1 => GlobalPool.reserveStack1MiB(),
-            .MiB_2 => GlobalPool.reserveStack2MiB(),
-        };
+stack: Stack,
 
-        backend.setupBaseStackFrame(stack, f);
+pub fn init(f: *const fn() void, options: CoroutineOptions) !Coroutine {
+    const stack = try switch (options.stack_size) {
+        .KiB_4 => GlobalPool.reserveStack4KiB(),
+        .KiB_8 => GlobalPool.reserveStack8KiB(),
+        .KiB_16 => GlobalPool.reserveStack16KiB(),
+        .KiB_32 => GlobalPool.reserveStack32KiB(),
+        .KiB_64 => GlobalPool.reserveStack64KiB(),
+        .KiB_128 => GlobalPool.reserveStack128KiB(),
+        .KiB_256 => GlobalPool.reserveStack256KiB(),
+        .KiB_512 => GlobalPool.reserveStack512KiB(),
+        .MiB_1 => GlobalPool.reserveStack1MiB(),
+        .MiB_2 => GlobalPool.reserveStack2MiB(),
+    };
 
-        return .{
-            .stack = stack,
-        };
-    }
+    backend.setupBaseStackFrame(stack, f);
 
-    pub fn yield() void {
-        const header = backend.locate_header();
-        assert(header.status == .running);
-        header.status = .yielded;
-        backend.ctx_switch(&header.coro_sp, header.ext_sp);
-    }
+    return .{
+        .stack = stack,
+    };
+}
 
-    pub fn enter(coroutine: *Coroutine) void {
-        const header = coroutine.stack.header();
-        assert(header.status != .completed);
-        assert(header.status != .running);
-        header.status = .running;
-        backend.ctx_switch(&header.ext_sp, header.coro_sp);
-    }
-};
+pub fn yield() void {
+    const header = backend.locate_header();
+    assert(header.status == .running);
+    header.status = .yielded;
+    backend.ctx_switch(&header.coro_sp, header.ext_sp);
+}
+
+pub fn enter(coroutine: *Coroutine) void {
+    const header = coroutine.stack.header();
+    assert(header.status != .completed);
+    assert(header.status != .running);
+    header.status = .running;
+    backend.ctx_switch(&header.ext_sp, header.coro_sp);
+}
 
 const expected: u32 = 810812;
 const initial: u32 = 123;
