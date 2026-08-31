@@ -9,8 +9,6 @@ const backend = switch (cpu) {
 };
 
 const Stack = @import("Stack.zig");
-const Pool = @import("Pool.zig");
-const GlobalPool = &Pool.GlobalPool;
 
 pub const StackSize = enum { KiB_4, KiB_8, KiB_16, KiB_32, KiB_64, KiB_128, KiB_256, KiB_512, MiB_1, MiB_2 };
 pub const CoroutineOptions = struct {
@@ -23,16 +21,16 @@ stack: Stack,
 
 pub fn init(f: *const fn() void, options: CoroutineOptions) !Coroutine {
     const stack = try switch (options.stack_size) {
-        .KiB_4 => GlobalPool.reserveStack4KiB(),
-        .KiB_8 => GlobalPool.reserveStack8KiB(),
-        .KiB_16 => GlobalPool.reserveStack16KiB(),
-        .KiB_32 => GlobalPool.reserveStack32KiB(),
-        .KiB_64 => GlobalPool.reserveStack64KiB(),
-        .KiB_128 => GlobalPool.reserveStack128KiB(),
-        .KiB_256 => GlobalPool.reserveStack256KiB(),
-        .KiB_512 => GlobalPool.reserveStack512KiB(),
-        .MiB_1 => GlobalPool.reserveStack1MiB(),
-        .MiB_2 => GlobalPool.reserveStack2MiB(),
+        .KiB_4 => Stack.create(1 * Stack.system_page_size_bytes),
+        .KiB_8 => Stack.create(2 * Stack.system_page_size_bytes),
+        .KiB_16 => Stack.create(4 * Stack.system_page_size_bytes),
+        .KiB_32 => Stack.create(8 * Stack.system_page_size_bytes),
+        .KiB_64 => Stack.create(16 * Stack.system_page_size_bytes),
+        .KiB_128 => Stack.create(32 * Stack.system_page_size_bytes),
+        .KiB_256 => Stack.create(64 * Stack.system_page_size_bytes),
+        .KiB_512 => Stack.create(128 * Stack.system_page_size_bytes),
+        .MiB_1 => Stack.create(256 * Stack.system_page_size_bytes),
+        .MiB_2 => Stack.create(512 * Stack.system_page_size_bytes),
     };
 
     backend.setupBaseStackFrame(stack, f);
