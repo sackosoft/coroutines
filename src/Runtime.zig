@@ -12,17 +12,34 @@ const queue_service_limit: usize = 1000;
 wait_queue: IntrusiveStackList = .{},
 ready_queue: IntrusiveStackList = .{},
 
+fn spawn(rt: *Runtime) void {
+    _ = rt;
+}
+
+fn run(rt: *Runtime) void {
+    _ = rt;
+}
+
 fn step(rt: *Runtime) void {
     // Shove all completed waits into the ready queue.
+    // TODO: Thinking this through a bit more, we don't even need to track the tasks that are in waiting state. They can be
+    // registered as user-data in kernel/operating system wait mechanisms so that we directly update their status and
+    // put them in the ready queue in an on-demand fashion when we get those notifications from the OS/kernel.
     if (rt.wait_queue.head) |head| {
         var p: ?Stack = head;
-        while (p != null) : (p = if (p.?.header().next) |n| Stack{.vm_base_address = n} else null) {
-            const stack = p.?;
-            const header = stack.header();
-            assert(header.status == .waiting);
-            if (header.wait_done) {
-                rt.wait_queue.remove(stack);
-                rt.ready_queue.append_back(stack);
+        while (p != null) {
+            // Must be computed ahead of time since we reorganize the links on `p` if it moves to the ready queue.
+            const next: ?Stack = if (p.?.header().next) |n| Stack{.vm_base_address = n} else null;
+            defer p = next;
+            {
+                const stack = p.?;
+                const header = stack.header();
+                assert(header.status == .waiting);
+                if (header.wait_done) {
+                    rt.wait_queue.remove(stack);
+                    header.status = .yielded;
+                    rt.ready_queue.append_back(stack);
+                }
             }
         }
     }
@@ -42,13 +59,14 @@ fn step(rt: *Runtime) void {
     if (rt.ready_queue.tail) |end| {
         var stack: Stack = undefined;
         for (0..queue_service_limit) |_| {
-            if(!rt.ready_queue.try_pop_front(&stack) or stack.vm_base_address == end.vm_base_address) {
+            if(!rt.ready_queue.try_pop_front(&stack)) {
                 break;
             }
 
             const header = stack.header();
             assert(header.status != .completed);
             assert(header.status != .running);
+            assert(header.status != .waiting);
 
             switch (Coroutine.enter2(stack)) {
                 .created => unreachable,
@@ -57,11 +75,17 @@ fn step(rt: *Runtime) void {
                 .waiting => rt.wait_queue.append_back(stack),
                 .completed => continue,
             }
+
+            if (stack.vm_base_address == end.vm_base_address) {
+                break;
+            }
         }
     }
 }
 
 const IntrusiveStackList = struct {
+    // TODO: Add a .count tracking the number of items in total. This would simplify the logic for servicing queues
+    // to a simple pop n items instead of tracking which item is the end and making sure we don't go past it.
     head: ?Stack = null,
     tail: ?Stack = null,
 
@@ -120,6 +144,8 @@ const IntrusiveStackList = struct {
     }
 
     fn append_back(this: *IntrusiveStackList, item: Stack) void {
+        assert(item.header().next == null);
+        assert(item.header().prev == null);
         if (this.head == null and this.tail == null) {
             assert(item.header().prev == null);
             assert(item.header().next == null);

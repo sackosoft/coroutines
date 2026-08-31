@@ -59,6 +59,7 @@ pub fn enter2(stack: Stack) StackHeader.Status {
     const header = stack.header();
     assert(header.status != .running);
     assert(header.status != .completed);
+    assert(header.status != .waiting);
     header.status = .running;
     backend.ctx_switch(&header.ext_sp, header.coro_sp);
     assert(header.status != .running);

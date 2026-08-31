@@ -11,6 +11,9 @@ pub const Status = enum (u8) {
 /// scheduler function or some kind of event loop. This stack pointer is saved here so
 /// that those external functions can be resumed when the coroutine finishes running or
 /// yields to wait for something to happen.
+/// TODO: Optional pointers have a well-defined and stable ABI in zig. We should update
+/// ctx_switch to manage this field as an optional pointer type, so we can play nice
+/// with zig code referencing it.
 ext_sp: *anyopaque,
 
 // Contains the stack pointer (%rsp register) of the coroutine. For coroutine instances
@@ -33,16 +36,14 @@ status: Status,
 
 /// Used by schedulers or other external runtimes to create an intrusive singly linked
 /// list of stacks, instead of allocating and managing data structures separately.
-/// Note: this field is meant to be managed 100% by higher level users of the library,
-/// it should NOT be interacted with by the backend architecture or assembly machinery
-/// since the nullable pointer type is part of the Zig ABI which has no guaranteed
-/// representation or stability.
+/// Note: this field is meant to be opaque user-data owned by higher level implementations
+/// like a runtime or event loop. This field shall not be touched by the coroutine
+/// assembly backend or library internals.
 next: ?*anyopaque = null,
 
 /// Used by schedulers or other external runtimes to create an intrusive doubly linked
 /// list of stacks, instead of allocating and managing data structures separately.
-/// Note: this field is meant to be managed 100% by higher level users of the library,
-/// it should NOT be interacted with by the backend architecture or assembly machinery
-/// since the nullable pointer type is part of the Zig ABI which has no guaranteed
-/// representation or stability.
+/// Note: this field is meant to be opaque user-data owned by higher level implementations
+/// like a runtime or event loop. This field shall not be touched by the coroutine
+/// assembly backend or library internals.
 prev: ?*anyopaque = null,

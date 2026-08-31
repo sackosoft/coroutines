@@ -20,7 +20,8 @@ pub fn setupBaseStackFrame(stack: Stack, f: *const fn() void) void {
         .ext_sp = undefined,      // caller stack pointer, will be set during first `ctx_switch` call.
         .coro_sp = @ptrCast(ptr), // saved stack pointer, now initialized with the fake base stack frame.
         .status = .created,
-        .next = undefined,
+        .next = null,
+        .prev = null,
     };
 }
 

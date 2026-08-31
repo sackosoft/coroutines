@@ -20,7 +20,7 @@ pub fn create(usable_stack_size_bytes: usize) !Stack {
         return error.StackSizeIsNotPageAligned;
     }
 
-    if (usable_stack_size_bytes > (1 << max_stack_size)) {
+    if (usable_stack_size_bytes > max_stack_size) {
         return error.StackTooLarge;
     }
 
@@ -208,4 +208,17 @@ test "No pages in virtual address range should be mapped after destroy()" {
             try assertAddressNotMapped(probe);
         }
     }
+}
+
+test "Stack.create error cases" {
+    try std.testing.expectError(error.StackSizeIsNotPageAligned, Stack.create(1));
+    try std.testing.expectError(error.StackSizeIsNotPageAligned, Stack.create(512));
+    try std.testing.expectError(error.StackSizeIsNotPageAligned, Stack.create(system_page_size_bytes + 1));
+    try std.testing.expectError(error.StackSizeIsNotPageAligned, Stack.create(system_page_size_bytes - 1));
+
+    try std.testing.expectError(error.StackTooLarge, Stack.create(max_stack_size + system_page_size_bytes));
+    try std.testing.expectError(error.StackTooLarge, Stack.create(max_stack_size + 2 * system_page_size_bytes));
+    try std.testing.expectError(error.StackTooLarge, Stack.create(max_stack_size * 2));
+    try std.testing.expectError(error.StackTooLarge, Stack.create(max_stack_size * 8));
+    try std.testing.expectError(error.StackTooLarge, Stack.create(max_stack_size * 256));
 }
