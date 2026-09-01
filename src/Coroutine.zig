@@ -205,7 +205,7 @@ fn coroWithArgs() void {
     capturedArg2 = Coroutine.arg2(@TypeOf(capturedArg2));
     capturedArg3 = Coroutine.arg3(@TypeOf(capturedArg3));
 }
-test "Coroutines should support passing arguments via stack header state (argN() functions)" {
+test "Coroutines can access input arguments via argN(T) functions" {
     capturedArg0 = null;
     capturedArg1 = 0;
     capturedArg2 = .{ .a = 0, .b = 0 };
@@ -229,3 +229,13 @@ test "Coroutines should support passing arguments via stack header state (argN()
     try std.testing.expectEqual(expectedArg2, capturedArg2);
     try std.testing.expectEqual(expectedArg3, capturedArg3);
 }
+
+// fn coroReturnsError() !void {
+    // return error.TestCoroReturnsError;
+// }
+// test "Coroutines can return errors via fail(anyerror) function" {
+    // const stack = try Coroutine.create(coroReturnsError, .{}, .{});
+    // const status = Coroutine.enter(stack);
+    // try std.testing.expectEqual(.failed, status);
+    // try std.testing.expectEqual(stack.header().failure, error.TestCoroReturnsError);
+// }
