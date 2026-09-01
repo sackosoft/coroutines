@@ -11,12 +11,9 @@ const queue_service_limit: usize = 1000;
 
 ready_queue: IntrusiveStackList = .{},
 
-fn spawn(rt: *Runtime) void {
-    _ = rt;
-}
-
-fn run(rt: *Runtime) void {
-    _ = rt;
+fn spawn(rt: *Runtime, entrypoint: *const fn() void, args: anytype) !void {
+    const stack = Coroutine.create(entrypoint, args, .{});
+    rt.ready_queue.append_back(stack);
 }
 
 fn step(rt: *Runtime) void {
@@ -37,7 +34,7 @@ fn step(rt: *Runtime) void {
             assert(header.status != .running);
             assert(header.status != .waiting);
 
-            switch (Coroutine.enter2(stack)) {
+            switch (Coroutine.enter(stack)) {
                 .created => unreachable,
                 .running => unreachable,
                 .yielded => rt.ready_queue.append_back(stack),

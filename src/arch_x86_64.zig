@@ -1,9 +1,17 @@
 const std = @import("std");
 
+const assert = std.debug.assert;
+
 const Stack = @import("Stack.zig");
 const StackHeader = @import("StackHeader.zig");
 
-pub fn setupBaseStackFrame(stack: Stack, f: *const fn() void) void {
+pub fn setupBaseStackFrame(stack: Stack, f: *const fn() void, args: anytype) void {
+    const ArgsType = @TypeOf(args);
+    const args_type_info = @typeInfo(ArgsType);
+    if (args_type_info != .@"struct") {
+        @compileError("expected tuple or struct argument, found " ++ @typeName(ArgsType));
+    }
+
     const ptr = @as([*]usize, @ptrCast(@alignCast(stack.top()))) - 8;
 
     ptr[7] = 0;                        // Fake return address, backtrace stopper.
@@ -23,6 +31,22 @@ pub fn setupBaseStackFrame(stack: Stack, f: *const fn() void) void {
         .next = null,
         .prev = null,
     };
+
+    if (args.len > 0) {
+        @as(*@TypeOf(args[0]), @ptrCast(&header.args[0])).* = args[0];
+    }
+    if (args.len > 1) { 
+        @as(*@TypeOf(args[1]), @ptrCast(&header.args[1])).* = args[1];
+    }
+    if (args.len > 2) {
+        @as(*@TypeOf(args[2]), @ptrCast(&header.args[2])).* = args[2];
+    }
+    if (args.len > 3) {
+        @as(*@TypeOf(args[3]), @ptrCast(&header.args[3])).* = args[3];
+    }
+    if (args.len > 4) {
+        @compileError("coroutine arguments cannot contain more than " ++ std.fmt.comptimePrint("{d}", .{StackHeader.max_allows_args}) ++ " arguments, found " ++ std.fmt.comptimePrint("{d}", .{args.len}));
+    }
 }
 
 comptime {

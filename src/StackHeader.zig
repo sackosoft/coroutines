@@ -87,3 +87,10 @@ next: ?*anyopaque = null,
 /// like a runtime or event loop. This field shall not be touched by the coroutine
 /// assembly backend or library internals.
 prev: ?*anyopaque = null,
+
+/// An area of backing storage for up to four pointer-sized arguments to the coroutine,
+/// available to the entrypoint function of the coroutine and all nested stack frames
+/// during execution.
+args: [4]usize = .{0, 0, 0, 0},
+
+pub const max_allows_args: comptime_int = @typeInfo(@FieldType(@This(), "args")).array.len;
