@@ -68,34 +68,20 @@ pub fn enter(stack: Stack) StackHeader.Status {
     return header.status;
 }
 
-pub const Argument = enum(usize) {
-    first = 0,
-    second = 1,
-    third = 2,
-    fourth = 3,
-};
-comptime {
-    assert(@typeInfo(Argument).@"enum".fields.len == StackHeader.max_allows_args); // Coroutine argument contract drifted from coroutine header support
-}
-
-pub fn arg(T: type, args: Argument) T {
-    return argInternal(T, @intFromEnum(args));
-}
-
 pub fn arg0(T: type) T {
-    return arg(T, .first);
+    return argInternal(T, 0);
 }
 
 pub fn arg1(T: type) T {
-    return arg(T, .second);
+    return argInternal(T, 1);
 }
 
 pub fn arg2(T: type) T {
-    return arg(T, .third);
+    return argInternal(T, 2);
 }
 
 pub fn arg3(T: type) T {
-    return arg(T, .fourth);
+    return argInternal(T, 3);
 }
 
 fn argInternal(T: type, index: usize) T {
