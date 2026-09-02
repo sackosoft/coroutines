@@ -5,13 +5,15 @@ const assert = std.debug.assert;
 const Stack = @import("Stack.zig");
 const StackHeader = @import("StackHeader.zig");
 
-pub fn setupBaseStackFrame(stack: Stack, f: *const fn() void, args: anytype) void {
-    const ArgsType = @TypeOf(args);
-    const args_type_info = @typeInfo(ArgsType);
-    if (args_type_info != .@"struct") {
-        @compileError("expected tuple or struct argument, found " ++ @typeName(ArgsType));
-    }
+pub fn setupBaseStackFrame(stack: Stack, f: *const fn() anyerror!void, args: anytype) void {
+    setupBaseStackFrameSignatureErased(stack, @ptrCast(f), args);
+}
 
+pub fn setupBaseStackFrameWithError(stack: Stack, f: *const fn() anyerror!void, args: anytype) void {
+    setupBaseStackFrameSignatureErased(stack, @ptrCast(f), args);
+}
+
+fn setupBaseStackFrameSignatureErased(stack: Stack, f: *anyopaque, args: anytype) void {
     const ptr = @as([*]usize, @ptrCast(@alignCast(stack.top()))) - 8;
 
     ptr[7] = 0;                        // Fake return address, backtrace stopper.
@@ -47,6 +49,36 @@ pub fn setupBaseStackFrame(stack: Stack, f: *const fn() void, args: anytype) voi
     if (args.len > 4) {
         @compileError("coroutine arguments cannot contain more than " ++ std.fmt.comptimePrint("{d}", .{StackHeader.max_allows_args}) ++ " arguments, found " ++ std.fmt.comptimePrint("{d}", .{args.len}));
     }
+}
+
+/// A shim between the assembly level calling ABI and the user-provided Zig function.
+/// In Debug builds, by default, Zig does some call stack trickery so that it can provide
+/// a error return traces (indicating the origin of an error in something akin to a stack
+/// trace). See https://ziglang.org/documentation/master/#Error-Return-Traces
+/// Unfortunately, when this functionality is enabled, Zig allocates a struct on the stack
+/// and secretly passes a pointer to that struct in the first parameter register for
+/// all nested function call sites in the generated assembly. Instead of trying to manage
+/// that ABI directly with our coroutine machinery, we will instead introduce this shim,
+/// which manages that Zig layer internally and exposes a simple function with a void
+/// return signature.
+export fn invokeEntryWithErrorHandling(userFunction: *anyopaque) void {
+    const header = locate_header();
+
+    const f: *const fn() anyerror!void = @ptrCast(@alignCast(userFunction));
+    f() catch |e| {
+        header.status = .failed;
+        header.failure = e;
+        return;
+    };
+
+    header.status = .completed;
+}
+
+export fn invokeEntry(userFunction: *anyopaque) void {
+    const header = locate_header();
+    const f: *const fn() void = @ptrCast(@alignCast(userFunction));
+    f();
+    header.status = .completed;
 }
 
 comptime {
@@ -96,16 +128,34 @@ comptime {
 ///   happens after the save to `old_sp.*` and would clobber it.
 pub extern fn ctx_switch(old_sp: *?*anyopaque, new_sp: *?*anyopaque) void;
 
-comptime {
-    asm (
-        \\.global trampoline
-        \\trampoline:
-        \\  pushq %rbp      # re-align %rsp to 16 before the call
-        \\  movq %r12, %rdi
-        \\  callq *%r13
-        \\  jmp coro_exit   # never `ret` out of a coroutine stack
-    );
-}
+const _asm_trampoline = std.fmt.comptimePrint(
+
+    \\.global trampoline
+    \\trampoline:
+    \\  pushq %rbp      # re-align %rsp to 16 before the call
+    \\  movq %r13, %rdi
+    \\  leaq 0x{x:016}(%rsp), %rax
+    \\  andq $~0x{x:016}, %rax
+    \\  leaq -0x{x:016}(%rax), %rax
+    \\  lea 0x{x:016}(%rax), %r8 # %r8 = &header.call_convention
+    \\  mov (%r8), %r9           # %r9 = (&header.call_convention).*
+    \\  cmp $0x{x:02}, %r9
+    \\  jz call_conv_void
+    \\call_conv_anyerror_union_void:
+    \\  callq invokeEntryWithErrorHandling
+    \\  jmp coro_exit   # never `ret` out of a coroutine stack
+    \\call_conv_void:
+    \\  callq invokeEntry
+    \\  jmp coro_exit   # never `ret` out of a coroutine stack
+    , .{
+        Stack.max_stack_size - 1,
+        Stack.max_stack_size - 1,
+        @sizeOf(StackHeader),
+        @offsetOf(StackHeader, "call_convention"),
+        @intFromEnum(StackHeader.CallConvention.returns_void),
+    },
+);
+comptime { asm (_asm_trampoline); }
 extern fn trampoline() void;
 
 // A coroutine's entry function must not `ret` normally because the frame below it was
@@ -158,15 +208,12 @@ const _asm_coro_exit = std.fmt.comptimePrint(
     \\  andq $~0x{x:016}, %rax
     \\  leaq -0x{x:016}(%rax), %rax
     \\  leaq 0x{x:016}(%rax), %rsi       # %rsi = &header.ext_sp
-    \\  movb $0x{x:02}, 0x{x:016}(%rax)  # header.status = .completed
     \\  jmp ctx_restore
     , .{
         Stack.max_stack_size - 1,
         Stack.max_stack_size - 1,
         @sizeOf(StackHeader),
         @offsetOf(StackHeader, "ext_sp"),
-        @intFromEnum(StackHeader.Status.completed),
-        @offsetOf(StackHeader, "status"),
     },
 );
 comptime { asm (_asm_coro_exit); }

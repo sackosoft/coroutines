@@ -33,7 +33,15 @@ pub const Status = enum (u8) {
     yielded,
     waiting,
     completed,
+    failed,
 };
+
+pub const CallConvention = enum (u8) {
+    returns_void = 0,
+    returns_anyerror_union_void = 1,
+};
+
+pub const max_allows_args: comptime_int = @typeInfo(@FieldType(@This(), "args")).array.len;
 
 /// The suspended context of whatever external code switched into this coroutine (a
 /// scheduler or event-loop). Written by `ctx_switch` on entry (the caller's %rsp after
@@ -74,6 +82,19 @@ coro_sp: ?*anyopaque,
 /// kind of event (like IO) to complete before it can be resumed.
 status: Status,
 
+/// Used by the coroutine backend to correctly call into the coroutine's entry function.
+/// Dependending on the signature of the function the user provided for the coroutine,
+/// we either need some setup to safely call into an error-returning zig function
+/// (`*const fn() !void`), or we can use a very simple no-setup code path to call into
+/// a void-returning zig function (`*const fn() void`).
+call_convention: CallConvention,
+
+/// Contains the error returned by the coroutine's entry function. Always null before
+/// and during execution, set when the coroutine's entry function returns. This field
+/// always has a value when the coroutine enters the 'failed' status, and is always null
+/// for any other status.
+failure: ?anyerror = null,
+
 /// Used by schedulers or other external runtimes to create an intrusive singly linked
 /// list of stacks, instead of allocating and managing data structures separately.
 /// Note: this field is meant to be opaque user-data owned by higher level implementations
@@ -92,5 +113,3 @@ prev: ?*anyopaque = null,
 /// available to the entrypoint function of the coroutine and all nested stack frames
 /// during execution.
 args: [4]usize = .{0, 0, 0, 0},
-
-pub const max_allows_args: comptime_int = @typeInfo(@FieldType(@This(), "args")).array.len;

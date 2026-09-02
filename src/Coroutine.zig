@@ -19,16 +19,27 @@ pub const Coroutine = @This();
 
 stack: Stack,
 
+
 pub fn create(f: *const fn() void, args: anytype, options: CoroutineOptions) !Stack {
+    validateArgs(args);
+    const stack = try createStack(options);
+    backend.setupBaseStackFrame(stack, f, args);
+    return stack;
+}
+
+pub fn createWithError(f: *const fn() anyerror!void, args: anytype, options: CoroutineOptions) !Stack {
+    validateArgs(args);
+    const stack = try createStack(options);
+    backend.setupBaseStackFrameWithError(stack, f, args);
+    return stack;
+}
+
+fn validateArgs(args: anytype) void {
     const ArgsType = @TypeOf(args);
     const args_type_info = @typeInfo(ArgsType);
     if (args_type_info != .@"struct") {
         @compileError("expected tuple or struct argument, found " ++ @typeName(ArgsType));
     }
-
-    const stack = try createStack(options);
-    backend.setupBaseStackFrame(stack, f, args);
-    return stack;
 }
 
 fn createStack(options: CoroutineOptions) !Stack {
@@ -104,10 +115,10 @@ fn argInternal(T: type, index: usize) T {
 const expected: u32 = 810812;
 const initial: u32 = 123;
 var test_val: u32 = initial;
-fn setTestVal() void {
+fn setTestVal() !void {
     test_val = expected;
 }
-fn setTestValAfterYield() void {
+fn setTestValAfterYield() !void {
     Coroutine.yield();
     test_val = expected;
 }
@@ -139,7 +150,7 @@ var e2: std.Io.Event = undefined;
 var e3: std.Io.Event = undefined;
 var mutexToCheckIfRunning: std.Io.Mutex = undefined;
 var proceedToTestSignal: std.Io.Condition = undefined;
-fn mutexLockThenYield() void {
+fn mutexLockThenYield() !void {
     e2.set(mutexLockThenYieldIo);
     e1.wait(mutexLockThenYieldIo) catch unreachable;
     Coroutine.yield();
@@ -175,7 +186,7 @@ test "Coroutine should properly track all lifecycle statuses" {
     try std.testing.expectEqual(.completed, stack.header().status);
 }
 
-fn empty() void {
+fn empty() !void {
 }
 test "Coroutines should manage ext_sp and coro_sp as optional pointers" {
     const stack = try Coroutine.create(empty, .{}, .{});
@@ -199,7 +210,7 @@ var capturedArg0: ?*anyopaque = undefined;
 var capturedArg1: usize = undefined;
 var capturedArg2: SmallStruct = undefined;
 var capturedArg3: u18 = undefined;
-fn coroWithArgs() void {
+fn coroWithArgs() !void {
     capturedArg0 = Coroutine.arg0(@TypeOf(capturedArg0));
     capturedArg1 = Coroutine.arg1(@TypeOf(capturedArg1));
     capturedArg2 = Coroutine.arg2(@TypeOf(capturedArg2));
@@ -230,12 +241,13 @@ test "Coroutines can access input arguments via argN(T) functions" {
     try std.testing.expectEqual(expectedArg3, capturedArg3);
 }
 
-// fn coroReturnsError() !void {
-    // return error.TestCoroReturnsError;
-// }
-// test "Coroutines can return errors via fail(anyerror) function" {
-    // const stack = try Coroutine.create(coroReturnsError, .{}, .{});
-    // const status = Coroutine.enter(stack);
-    // try std.testing.expectEqual(.failed, status);
-    // try std.testing.expectEqual(stack.header().failure, error.TestCoroReturnsError);
-// }
+fn coroReturnsError() !void {
+    return error.TestCoroReturnsError;
+}
+test "Coroutines can return errors via fail(anyerror) function" {
+    const stack = try Coroutine.create(coroReturnsError, .{}, .{});
+    const status = Coroutine.enter(stack);
+    try std.testing.expectEqual(.failed, status);
+    try std.testing.expect(stack.header().failure != null);
+    try std.testing.expectEqual(error.TestCoroReturnsError, stack.header().failure.?);
+}
