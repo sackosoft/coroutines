@@ -12,7 +12,7 @@ scheduler, lifecycle contract, timers, and terminal-state semantics.
 4. `004-ready-only-runtime.md`
 5. `005-lifecycle-and-scheduling-contract.md`
 6. `006-timers-before-io.md`
-7. `007-failure-cancellation-and-results.md`
+7. `007-runtime-failure-and-cancellation.md`
 
 Task 004 is the first useful vertical slice. Tasks 003 and 005 define parts of its API and should be developed together
 where necessary. Task 006 should establish the event-wait protocol before a FreeBSD `kqueue` reactor is added. Task 007
