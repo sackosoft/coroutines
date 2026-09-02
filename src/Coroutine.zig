@@ -19,7 +19,6 @@ pub const Coroutine = @This();
 
 stack: Stack,
 
-
 pub fn create(f: *const fn() void, args: anytype, options: CoroutineOptions) !Stack {
     validateArgs(args);
     const stack = try createStack(options);
@@ -66,9 +65,11 @@ pub fn yield() void {
 }
 
 pub fn enter(stack: Stack) StackHeader.Status {
+    // TODO: Should these assertions become runtime checks and make this `enter(stack: Stack) error.Lifecycle!StackHeader.status`?
     const header = stack.header();
     assert(header.status != .running);
     assert(header.status != .completed);
+    assert(header.status != .failed);
     assert(header.status != .waiting);
     header.status = .running;
     assert(header.ext_sp == null);
@@ -115,10 +116,10 @@ fn argInternal(T: type, index: usize) T {
 const expected: u32 = 810812;
 const initial: u32 = 123;
 var test_val: u32 = initial;
-fn setTestVal() !void {
+fn setTestVal() void {
     test_val = expected;
 }
-fn setTestValAfterYield() !void {
+fn setTestValAfterYield() void {
     Coroutine.yield();
     test_val = expected;
 }
@@ -152,7 +153,7 @@ var mutexToCheckIfRunning: std.Io.Mutex = undefined;
 var proceedToTestSignal: std.Io.Condition = undefined;
 fn mutexLockThenYield() !void {
     e2.set(mutexLockThenYieldIo);
-    e1.wait(mutexLockThenYieldIo) catch unreachable;
+    try e1.wait(mutexLockThenYieldIo);
     Coroutine.yield();
 }
 test "Coroutine should properly track all lifecycle statuses" {
@@ -161,7 +162,7 @@ test "Coroutine should properly track all lifecycle statuses" {
     e2 = .unset;
     e3 = .unset;
 
-    var stack = try Coroutine.create(mutexLockThenYield, .{}, .{});
+    var stack = try Coroutine.createWithError(mutexLockThenYield, .{}, .{});
     try std.testing.expectEqual(.created, stack.header().status);
 
     const A = struct {
@@ -186,7 +187,7 @@ test "Coroutine should properly track all lifecycle statuses" {
     try std.testing.expectEqual(.completed, stack.header().status);
 }
 
-fn empty() !void {
+fn empty() void {
 }
 test "Coroutines should manage ext_sp and coro_sp as optional pointers" {
     const stack = try Coroutine.create(empty, .{}, .{});
@@ -210,7 +211,7 @@ var capturedArg0: ?*anyopaque = undefined;
 var capturedArg1: usize = undefined;
 var capturedArg2: SmallStruct = undefined;
 var capturedArg3: u18 = undefined;
-fn coroWithArgs() !void {
+fn coroWithArgs() void {
     capturedArg0 = Coroutine.arg0(@TypeOf(capturedArg0));
     capturedArg1 = Coroutine.arg1(@TypeOf(capturedArg1));
     capturedArg2 = Coroutine.arg2(@TypeOf(capturedArg2));
@@ -245,7 +246,7 @@ fn coroReturnsError() !void {
     return error.TestCoroReturnsError;
 }
 test "Coroutines can return errors via fail(anyerror) function" {
-    const stack = try Coroutine.create(coroReturnsError, .{}, .{});
+    const stack = try Coroutine.createWithError(coroReturnsError, .{}, .{});
     const status = Coroutine.enter(stack);
     try std.testing.expectEqual(.failed, status);
     try std.testing.expect(stack.header().failure != null);

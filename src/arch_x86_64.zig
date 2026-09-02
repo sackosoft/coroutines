@@ -5,15 +5,38 @@ const assert = std.debug.assert;
 const Stack = @import("Stack.zig");
 const StackHeader = @import("StackHeader.zig");
 
-pub fn setupBaseStackFrame(stack: Stack, f: *const fn() anyerror!void, args: anytype) void {
-    setupBaseStackFrameSignatureErased(stack, @ptrCast(f), args);
+/// Used to initialize the metadata header and initial call stack frame at the top of
+/// the memory region pointed to by the given `stack`. The metadata and special stack
+/// frame enable the deferred execution of the given `userFunction` which will have access
+/// to the given `args`. This is NOT a user-facing contract and should only be used
+/// through the `Coroutine` type.
+pub fn setupBaseStackFrame(
+    stack: Stack,
+    userFunction: *const fn() void,
+    args: anytype,
+) void {
+    setupBaseStackFrameSignatureErased(stack, @ptrCast(userFunction), args, .returns_void);
 }
 
-pub fn setupBaseStackFrameWithError(stack: Stack, f: *const fn() anyerror!void, args: anytype) void {
-    setupBaseStackFrameSignatureErased(stack, @ptrCast(f), args);
+/// Used to initialize the metadata header and initial call stack frame at the top of
+/// the memory region pointed to by the given `stack`. The metadata and special stack
+/// frame enable the deferred execution of the given `userFunction` which will have access
+/// to the given `args`. This is NOT a user-facing contract and should only be used
+/// through the `Coroutine` type.
+pub fn setupBaseStackFrameWithError(
+    stack: Stack,
+    userFunction: *const fn() anyerror!void,
+    args: anytype,
+) void {
+    setupBaseStackFrameSignatureErased(stack, @ptrCast(userFunction), args, .returns_anyerror_union_void);
 }
 
-fn setupBaseStackFrameSignatureErased(stack: Stack, f: *anyopaque, args: anytype) void {
+fn setupBaseStackFrameSignatureErased(
+    stack: Stack,
+    f: *const anyopaque,
+    args: anytype,
+    call_convention: StackHeader.CallConvention,
+) void {
     const ptr = @as([*]usize, @ptrCast(@alignCast(stack.top()))) - 8;
 
     ptr[7] = 0;                        // Fake return address, backtrace stopper.
@@ -30,6 +53,7 @@ fn setupBaseStackFrameSignatureErased(stack: Stack, f: *anyopaque, args: anytype
         .ext_sp = null,           // caller stack pointer, will be set during first `ctx_switch` call.
         .coro_sp = @ptrCast(ptr), // saved stack pointer, now initialized with the fake base stack frame.
         .status = .created,
+        .call_convention = call_convention,
         .next = null,
         .prev = null,
     };
@@ -85,25 +109,25 @@ comptime {
     asm (
         \\.global ctx_switch
         \\ctx_switch:
-        \\  pushq %rbp
-        \\  pushq %rbx
-        \\  pushq %r12
-        \\  pushq %r13
-        \\  pushq %r14
-        \\  pushq %r15
-        \\  movq %rsp, (%rdi) # *old_sp = %rsp
+        \\    pushq %rbp
+        \\    pushq %rbx
+        \\    pushq %r12
+        \\    pushq %r13
+        \\    pushq %r14
+        \\    pushq %r15
+        \\    movq %rsp, (%rdi) # *old_sp = %rsp
         \\
         \\.global ctx_restore
         \\ctx_restore:
-        \\  movq (%rsi), %rsp # %rsp = new_sp
-        \\  movq $0, (%rsi)   # *new_sp = NULL
-        \\  popq %r15
-        \\  popq %r14
-        \\  popq %r13
-        \\  popq %r12
-        \\  popq %rbx
-        \\  popq %rbp
-        \\  ret # into whatever called ctx_switch on new_sp's stack
+        \\    movq (%rsi), %rsp # %rsp = new_sp
+        \\    movq $0, (%rsi)   # *new_sp = NULL
+        \\    popq %r15
+        \\    popq %r14
+        \\    popq %r13
+        \\    popq %r12
+        \\    popq %rbx
+        \\    popq %rbp
+        \\    ret # into whatever called ctx_switch on new_sp's stack
     );
 }
 /// Saves the current execution context and switches to another.
@@ -128,35 +152,37 @@ comptime {
 ///   happens after the save to `old_sp.*` and would clobber it.
 pub extern fn ctx_switch(old_sp: *?*anyopaque, new_sp: *?*anyopaque) void;
 
+/// Used to "bounce" from the fake stack frame placed on the stack during coroutine
+/// initialization into an active call stack executing the user-specified entrypoint
+/// function for their coroutine. Since the user can specify a function which returns
+/// `void` or `!void`, we save information about the signature as
+/// `StackHeader.call_convention`. This is used to enter one of two shim functions
+/// which are responsible for executing the entry point function. See `invokeEntry` and
+/// `invokeEntryWithErrorHandling`.
+extern fn trampoline() void;
 const _asm_trampoline = std.fmt.comptimePrint(
 
     \\.global trampoline
     \\trampoline:
-    \\  pushq %rbp      # re-align %rsp to 16 before the call
-    \\  movq %r13, %rdi
-    \\  leaq 0x{x:016}(%rsp), %rax
-    \\  andq $~0x{x:016}, %rax
-    \\  leaq -0x{x:016}(%rax), %rax
-    \\  lea 0x{x:016}(%rax), %r8 # %r8 = &header.call_convention
-    \\  mov (%r8), %r9           # %r9 = (&header.call_convention).*
-    \\  cmp $0x{x:02}, %r9
-    \\  jz call_conv_void
-    \\call_conv_anyerror_union_void:
-    \\  callq invokeEntryWithErrorHandling
-    \\  jmp coro_exit   # never `ret` out of a coroutine stack
-    \\call_conv_void:
-    \\  callq invokeEntry
-    \\  jmp coro_exit   # never `ret` out of a coroutine stack
+    \\    pushq %rbp                   # re-align %rsp to 16 before the call
+    \\    callq locate_header          # %rax = &header
+    \\    lea 0x{x:016}(%rax), %r8     # %r8 = &header.call_convention
+    \\    cmpb $0x{x:02}, (%r8)        # (header.call_convention != .returns_void) 
+    \\    jz call_conv_void            # if (^):
+    \\  call_conv_anyerror_union_void:
+    \\    movq %r13, %rdi
+    \\    callq invokeEntryWithErrorHandling
+    \\    jmp coro_exit
+    \\  call_conv_void:                # else:
+    \\    movq %r13, %rdi
+    \\    callq invokeEntry
+    \\    jmp coro_exit
     , .{
-        Stack.max_stack_size - 1,
-        Stack.max_stack_size - 1,
-        @sizeOf(StackHeader),
         @offsetOf(StackHeader, "call_convention"),
         @intFromEnum(StackHeader.CallConvention.returns_void),
     },
 );
 comptime { asm (_asm_trampoline); }
-extern fn trampoline() void;
 
 // A coroutine's entry function must not `ret` normally because the frame below it was
 // fabricated during stack initialization, not by a real call. Instead, the stack is
@@ -172,19 +198,16 @@ extern fn trampoline() void;
 // why stacks must be allocated with size == alignment == max_stack_size; the header is
 // findable from any %rsp within the stack, and coro_exit depends on that.
 //
-// Having found the header, we:
-//   1. Mark status = completed. Done *before* the switch, so the resumed caller observes
-//      the final status immediately.
-//   2. Point %rsi at header.ext_sp and jump to ctx_restore the resume-only tail of
-//      ctx_switch. This is a one-way switch: we deliberately skip the save phase because
-//      this stack is dead. There is no frame to return into, so saving callee-saved
-//      registers and %rsp would only write a plausible-looking but unusable context into
-//      coro_sp.
+// Having found the header, we point %rsi at header.ext_sp and jump to ctx_restore the
+// resume-only tail of ctx_switch. This is a one-way switch: we deliberately skip the save
+// phase because this stack is dead. There is no frame to return into, so saving
+// callee-saved registers and %rsp would only write a plausible-looking but unusable
+// context into coro_sp.
 //
 // Header state on arrival:            Header state after the switch:
 //   coro_sp = null (running)            coro_sp = null (untouched)
 //   ext_sp  = caller ctx (non-null)     ext_sp  = null (set to null by ctx_restore)
-//   status  = running/active            status  = completed
+//   status  = completed/failed          status  = completed/failed (untouched, set by shims)
 //
 // Invariants this relies on:
 //   - ext_sp is non-null whenever a coroutine is executing: the only way onto this
@@ -196,28 +219,28 @@ extern fn trampoline() void;
 //     be freed concurrently. In the current single-threaded design the owner can't
 //     free until control returns to it, which is after that store by construction.
 //
-// From the caller's perspective, the original ctx_switch into this
-// coroutine simply returns, with status == completed telling it the
-// coroutine finished rather than yielded. The stack may then be reused
-// or freed; every header field is already in its idle/terminal state, so
-// no cleanup is owed here.
+// From the caller's perspective, the original ctx_switch into this coroutine simply
+// returns, with status either set to completed or failed, telling it the coroutine
+// finished rather than yielded. The stack may then be reused or freed; every header
+// field is already in its idle/terminal state, so no cleanup is owed here.
 const _asm_coro_exit = std.fmt.comptimePrint(
     \\.global coro_exit
     \\coro_exit:
-    \\  leaq 0x{x:016}(%rsp), %rax
-    \\  andq $~0x{x:016}, %rax
-    \\  leaq -0x{x:016}(%rax), %rax
-    \\  leaq 0x{x:016}(%rax), %rsi       # %rsi = &header.ext_sp
-    \\  jmp ctx_restore
+    \\    callq locate_header
+    \\    leaq 0x{x:016}(%rax), %rsi       # %rsi = &header.ext_sp
+    \\    jmp ctx_restore
     , .{
-        Stack.max_stack_size - 1,
-        Stack.max_stack_size - 1,
-        @sizeOf(StackHeader),
         @offsetOf(StackHeader, "ext_sp"),
     },
 );
 comptime { asm (_asm_coro_exit); }
 
+/// Used by Zig code to identify the `StackHeader` of the actively running coroutine. This
+/// is achieved by exploiting how we have carefully reserved a virtual memory address range
+/// with a particular alignment. Since the stack pointer floats within that adress range,
+/// at any time we can round up the stack pointer to the alignment boundary, offset it by
+/// the size of the header, and return that address as a pointer to the header struct.
+pub extern fn locate_header() *StackHeader;
 const _asm_locate_header = std.fmt.comptimePrint(
     \\.global locate_header
     \\locate_header:
@@ -232,4 +255,3 @@ const _asm_locate_header = std.fmt.comptimePrint(
     },
 );
 comptime { asm (_asm_locate_header); }
-pub extern fn locate_header() *StackHeader;

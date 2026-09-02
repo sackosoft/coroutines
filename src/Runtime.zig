@@ -38,7 +38,8 @@ fn step(rt: *Runtime) void {
                 .created => unreachable,
                 .running => unreachable,
                 .yielded => rt.ready_queue.append_back(stack),
-                .waiting => rt.wait_queue.append_back(stack),
+                .waiting => unreachable, // TODO: Interpret wait request and dispatch appropriate syscalls.
+                .failed => unreachable, // TODO: Error callback? Halt the runtime?
                 .completed => continue,
             }
 
