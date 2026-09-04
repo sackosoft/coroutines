@@ -4,7 +4,8 @@ const assert = std.debug.assert;
 
 const Coroutine = @import("Coroutine.zig");
 const Stack = @import("Stack.zig");
-const IntrusiveStackList = @import("Stack.zig");
+const StackHeader = @import("StackHeader.zig");
+const IntrusiveStackList = @import("IntrusiveStackList.zig");
 
 const Runtime = @This();
 
@@ -12,9 +13,25 @@ const queue_service_limit: usize = 32;
 
 ready_queue: IntrusiveStackList = .{},
 
-fn spawn(rt: *Runtime, entrypoint: *const fn() void, args: anytype) !void {
-    const stack = Coroutine.create(entrypoint, args, .{});
+pub fn deinit(rt: *Runtime) void {
+    var stack: Stack = undefined;
+    while (rt.ready_queue.try_pop_front(&stack)) {
+        stack.destroy();
+    }
+}
+
+pub fn spawn(rt: *Runtime, entrypoint: *const fn() void, args: anytype) !void {
+    const stack = try Coroutine.create(entrypoint, args, .{});
     rt.ready_queue.append_back(stack);
+}
+
+pub fn spawnWithError(rt: *Runtime, entrypoint: *const fn() anyerror!void, args: anytype) !void {
+    const stack = try Coroutine.createWithError(entrypoint, args, .{});
+    rt.ready_queue.append_back(stack);
+}
+
+pub fn run(rt: *Runtime) !void {
+    _ = rt;
 }
 
 fn step(rt: *Runtime) void {
@@ -39,5 +56,24 @@ fn step(rt: *Runtime) void {
             .completed => continue,
         }
     }
+}
+
+test "step() should not run continuations in the same cycle" {
+    const T = struct {
+        fn testCoro() !void {
+            Coroutine.yield();
+            return error.NoContinuationsSameCycleTest;
+        }
+    };
+    var rt: Runtime = .{};
+    defer rt.deinit();
+    try rt.spawnWithError(T.testCoro, .{});
+    rt.step();
+    try std.testing.expectEqual(1, rt.ready_queue.count);
+    try std.testing.expectEqual(null, rt.ready_queue.head.?.header().failure);
+    const result = Coroutine.enter(rt.ready_queue.head.?);
+    try std.testing.expectEqual(StackHeader.Status.failed, result);
+    try std.testing.expectEqual(StackHeader.Status.failed, rt.ready_queue.head.?.header().status);
+    try std.testing.expectEqual(error.NoContinuationsSameCycleTest, rt.ready_queue.head.?.header().failure.?);
 }
 

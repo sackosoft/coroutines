@@ -9,7 +9,7 @@ count: usize = 0,
 head: ?Stack = null,
 tail: ?Stack = null,
 
-fn try_pop_front(this: *IntrusiveStackList, result: *Stack) bool {
+pub fn try_pop_front(this: *IntrusiveStackList, result: *Stack) bool {
     const head_null = this.head == null;
     assert(head_null == (this.tail == null));
     if (head_null) {
@@ -39,7 +39,7 @@ fn try_pop_front(this: *IntrusiveStackList, result: *Stack) bool {
     }
 }
 
-fn try_pop_back(this: *IntrusiveStackList, result: *Stack) bool {
+pub fn try_pop_back(this: *IntrusiveStackList, result: *Stack) bool {
     const tail_null = this.tail == null;
     assert(tail_null == (this.head == null));
     if (tail_null) {
@@ -69,7 +69,7 @@ fn try_pop_back(this: *IntrusiveStackList, result: *Stack) bool {
     }
 }
 
-fn append_back(this: *IntrusiveStackList, item: Stack) void {
+pub fn append_back(this: *IntrusiveStackList, item: Stack) void {
     assert(item.header().next == null);
     assert(item.header().prev == null);
     this.count += 1;
@@ -89,7 +89,7 @@ fn append_back(this: *IntrusiveStackList, item: Stack) void {
     }
 }
 
-fn remove(this: *IntrusiveStackList, item: Stack) void {
+pub fn remove(this: *IntrusiveStackList, item: Stack) void {
     if (this.head != null and this.head.?.vm_base_address == item.vm_base_address) {
         var s: Stack = undefined;
         const success = this.try_pop_front(&s);
