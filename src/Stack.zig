@@ -151,18 +151,22 @@ fn assertAddressMapped(probe: *anyopaque) !void {
     try std.testing.expect(result == 0);
 }
 
+pub fn assertStackMapped(stack: Stack) !void {
+    const ptr = @intFromPtr(stack.vm_base_address);
+    try std.testing.expect(ptr % 16 == 0);
+    for (0..(Stack.max_stack_size / system_page_size_bytes)) |j| {
+        const probe: *anyopaque = @ptrFromInt(ptr + (system_page_size_bytes * j));
+        try assertAddressMapped(probe);
+    }
+}
+
 test "All pages in virtual address range should be mapped" {
     for (0..8) |i| {
         const stack_size = @as(usize, 1) << @as(u6, @intCast(i));
         var stack = try create(system_page_size_bytes * stack_size);
         defer stack.destroy();
 
-        const ptr = @intFromPtr(stack.vm_base_address);
-        try std.testing.expect(ptr % 16 == 0);
-        for (0..(Stack.max_stack_size / system_page_size_bytes)) |j| {
-            const probe: *anyopaque = @ptrFromInt(ptr + (system_page_size_bytes * j));
-            try assertAddressMapped(probe);
-        }
+        try assertStackMapped(stack);
     }
 }
 
@@ -194,6 +198,15 @@ fn assertAddressNotMapped(probe: *anyopaque) !void {
     try std.testing.expectEqual(@intFromEnum(std.c.E.NOMEM), std.c._errno().*);
 }
 
+pub fn assertStackNotMapped(stack: Stack) !void {
+    const ptr = @intFromPtr(stack.vm_base_address);
+    try std.testing.expect(ptr % 16 == 0);
+    for (0..(Stack.max_stack_size / system_page_size_bytes)) |j| {
+        const probe: *anyopaque = @ptrFromInt(ptr + (system_page_size_bytes * j));
+        try assertAddressNotMapped(probe);
+    }
+}
+
 test "No pages in virtual address range should be mapped after destroy()" {
     for (0..8) |i| {
         const stack_size = @as(usize, 1) << @as(u6, @intCast(i));
@@ -201,12 +214,7 @@ test "No pages in virtual address range should be mapped after destroy()" {
 
         stack.destroy();
 
-        const ptr = @intFromPtr(stack.vm_base_address);
-        try std.testing.expect(ptr % 16 == 0);
-        for (0..(Stack.max_stack_size / system_page_size_bytes)) |j| {
-            const probe: *anyopaque = @ptrFromInt(ptr + (system_page_size_bytes * j));
-            try assertAddressNotMapped(probe);
-        }
+        try assertStackNotMapped(stack);
     }
 }
 

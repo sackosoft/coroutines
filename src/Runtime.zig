@@ -53,9 +53,26 @@ fn step(rt: *Runtime) void {
             .yielded => rt.ready_queue.append_back(stack),
             .waiting => unreachable, // TODO: Interpret wait request and dispatch appropriate syscalls.
             .failed => unreachable, // TODO: Error callback? Halt the runtime?
-            .completed => continue,
+            .completed => {
+                stack.destroy();
+            },
         }
     }
+}
+test "Runtime.deinit() should deallocate all coroutines in the ready queue" {
+    const T = struct {
+        fn testCoro() !void {
+            Coroutine.yield();
+        }
+    };
+
+    var rt: Runtime = .{};
+    try rt.spawnWithError(T.testCoro, .{});
+    try std.testing.expectEqual(1, rt.ready_queue.count);
+    const stack = rt.ready_queue.head.?;
+    try Stack.assertStackMapped(stack);
+    rt.deinit();
+    try Stack.assertStackNotMapped(stack);
 }
 
 test "step() should not run continuations in the same cycle" {
