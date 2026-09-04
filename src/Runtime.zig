@@ -34,7 +34,7 @@ pub fn run(rt: *Runtime) !void {
     _ = rt;
 }
 
-fn step(rt: *Runtime) void {
+fn step(rt: *Runtime) !void {
     var stack: Stack = undefined;
     for (0..@min(queue_service_limit, rt.ready_queue.count)) |_| {
         if(!rt.ready_queue.try_pop_front(&stack)) {
@@ -52,26 +52,71 @@ fn step(rt: *Runtime) void {
             .running => unreachable,
             .yielded => rt.ready_queue.append_back(stack),
             .waiting => unreachable, // TODO: Interpret wait request and dispatch appropriate syscalls.
-            .failed => unreachable, // TODO: Error callback? Halt the runtime?
+            .failed => {
+                // TODO: Should an error halt the runtime? Should an error be propagated upwards?
+                // Or should we let the user provide an error callback handler? I'm leaning toward
+                // stopping the runtime and returning the error, since we do not have very much
+                // information about the function or what went wrong. In my opinion, we should strive
+                // for a "perfect" execution, where errors are reserved for a fatal problem which
+                // requires that we propagate the failure upward (and halt/deallocate the runtime).
+                // Trying to handle errors as part of normal operation seems like it will leave open
+                // the door for failures as acceptable.
+                assert(stack.header().failure != null); // A coroutine with .failed status *must* set header.failure to the error that occurred.
+                const err = stack.header().failure.?;
+                stack.destroy();
+                return err;
+            },
             .completed => {
                 stack.destroy();
             },
         }
     }
 }
+
 test "Runtime.deinit() should deallocate all coroutines in the ready queue" {
     const T = struct {
-        fn testCoro() !void {
+        fn testCoro() void {
             Coroutine.yield();
         }
     };
-
     var rt: Runtime = .{};
-    try rt.spawnWithError(T.testCoro, .{});
+    try rt.spawn(T.testCoro, .{});
     try std.testing.expectEqual(1, rt.ready_queue.count);
     const stack = rt.ready_queue.head.?;
     try Stack.assertStackMapped(stack);
     rt.deinit();
+    try Stack.assertStackNotMapped(stack);
+}
+
+test "failed coroutines should stop the runtime, deallocate the failed coroutine and return the error" {
+    const T = struct {
+        fn testCoro() !void {
+            return error.FailedCoroutinesShouldBeDeallocated;
+        }
+    };
+    var rt: Runtime = .{};
+    defer rt.deinit();
+    try rt.spawnWithError(T.testCoro, .{});
+    try std.testing.expectEqual(1, rt.ready_queue.count);
+    const stack = rt.ready_queue.head.?;
+    try Stack.assertStackMapped(stack);
+    try std.testing.expectError(error.FailedCoroutinesShouldBeDeallocated, rt.step());
+    try std.testing.expectEqual(0, rt.ready_queue.count);
+    try Stack.assertStackNotMapped(stack);
+}
+
+test "completed coroutines should be deallocated" {
+    const T = struct {
+        fn testCoro() void {}
+    };
+    var rt: Runtime = .{};
+    defer rt.deinit();
+    try rt.spawn(T.testCoro, .{});
+    try std.testing.expectEqual(1, rt.ready_queue.count);
+    const stack = rt.ready_queue.head.?;
+    try Stack.assertStackMapped(stack);
+    try rt.step();
+    try std.testing.expectEqual(0, rt.ready_queue.count);
     try Stack.assertStackNotMapped(stack);
 }
 
@@ -85,7 +130,7 @@ test "step() should not run continuations in the same cycle" {
     var rt: Runtime = .{};
     defer rt.deinit();
     try rt.spawnWithError(T.testCoro, .{});
-    rt.step();
+    try rt.step();
     try std.testing.expectEqual(1, rt.ready_queue.count);
     try std.testing.expectEqual(null, rt.ready_queue.head.?.header().failure);
     const result = Coroutine.enter(rt.ready_queue.head.?);
