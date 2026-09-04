@@ -242,6 +242,34 @@ test "Coroutines can access input arguments via argN(T) functions" {
     try std.testing.expectEqual(expectedArg3, capturedArg3);
 }
 
+test "Coroutines can access arguments from any nested stack frame during execution" {
+    const expectedValue: u32 = 15891152;
+    const T = struct { 
+        fn entryPoint() !void {
+            try std.testing.expectEqual(expectedValue, Coroutine.arg0(u32));
+            try nested1();
+        }
+        fn nested1() !void {
+            try std.testing.expectEqual(expectedValue, Coroutine.arg0(u32));
+            try nested2();
+        }
+        fn nested2() !void {
+            try std.testing.expectEqual(expectedValue, Coroutine.arg0(u32));
+            try nested3();
+        }
+        fn nested3() !void {
+            try std.testing.expectEqual(expectedValue, Coroutine.arg0(u32));
+            try nested4();
+        }
+        fn nested4() !void {
+            try std.testing.expectEqual(expectedValue, Coroutine.arg0(u32));
+        }
+    };
+    const stack = try Coroutine.createWithError(T.entryPoint, .{expectedValue}, .{});
+    const status = Coroutine.enter(stack);
+    try std.testing.expectEqual(.completed, status);
+}
+
 fn coroReturnsError() !void {
     return error.TestCoroReturnsError;
 }
@@ -252,3 +280,4 @@ test "Coroutines can return errors via fail(anyerror) function" {
     try std.testing.expect(stack.header().failure != null);
     try std.testing.expectEqual(error.TestCoroReturnsError, stack.header().failure.?);
 }
+
