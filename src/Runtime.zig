@@ -9,9 +9,17 @@ const IntrusiveStackList = @import("IntrusiveStackList.zig");
 
 const Runtime = @This();
 
-const queue_service_limit: usize = 32;
+clock: TimeProvider,
+ready_queue: IntrusiveStackList,
 
-ready_queue: IntrusiveStackList = .{},
+pub fn init(
+    clock: TimeProvider,
+) Runtime {
+    return .{
+        .clock = clock,
+        .ready_queue = .{},
+    };
+}
 
 pub fn deinit(rt: *Runtime) void {
     var stack: Stack = undefined;
@@ -19,6 +27,22 @@ pub fn deinit(rt: *Runtime) void {
         stack.destroy();
     }
 }
+
+const TimeProvider = struct {
+    userdata: ?*anyopaque = null,
+    source: *const fn(clock_ud: ?*anyopaque) std.Io.Timestamp,
+};
+
+var counter: i64 = 0;
+fn counterTimeProvider(notused: ?*anyopaque) std.Io.Timestamp {
+    _ = notused;
+    const now = @atomicRmw(i64, &counter, .Add, 1, .monotonic);
+    return std.Io.Timestamp.fromNanoseconds(now);
+}
+const DefaultTimeProvider: TimeProvider = .{
+    .userdata = null,
+    .source = &counterTimeProvider,
+};
 
 pub fn spawn(rt: *Runtime, entrypoint: *const fn() void, args: anytype) !void {
     const stack = try Coroutine.create(entrypoint, args, .{});
@@ -35,6 +59,7 @@ pub fn run(rt: *Runtime) !void {
 }
 
 fn step(rt: *Runtime) !void {
+    const queue_service_limit: usize = 32;
     var stack: Stack = undefined;
     for (0..@min(queue_service_limit, rt.ready_queue.count)) |_| {
         if(!rt.ready_queue.try_pop_front(&stack)) {
@@ -79,7 +104,7 @@ test "Runtime.deinit() should deallocate all coroutines in the ready queue" {
             Coroutine.yield();
         }
     };
-    var rt: Runtime = .{};
+    var rt: Runtime = .init(DefaultTimeProvider);
     try rt.spawn(T.testCoro, .{});
     try std.testing.expectEqual(1, rt.ready_queue.count);
     const stack = rt.ready_queue.head.?;
@@ -94,7 +119,7 @@ test "failed coroutines should stop the runtime, deallocate the failed coroutine
             return error.FailedCoroutinesShouldBeDeallocated;
         }
     };
-    var rt: Runtime = .{};
+    var rt: Runtime = .init(DefaultTimeProvider);
     defer rt.deinit();
     try rt.spawnWithError(T.testCoro, .{});
     try std.testing.expectEqual(1, rt.ready_queue.count);
@@ -109,7 +134,7 @@ test "completed coroutines should be deallocated" {
     const T = struct {
         fn testCoro() void {}
     };
-    var rt: Runtime = .{};
+    var rt: Runtime = .init(DefaultTimeProvider);
     defer rt.deinit();
     try rt.spawn(T.testCoro, .{});
     try std.testing.expectEqual(1, rt.ready_queue.count);
@@ -127,7 +152,7 @@ test "step() should not run continuations in the same cycle" {
             return error.NoContinuationsSameCycleTest;
         }
     };
-    var rt: Runtime = .{};
+    var rt: Runtime = .init(DefaultTimeProvider);
     defer rt.deinit();
     try rt.spawnWithError(T.testCoro, .{});
     try rt.step();
