@@ -70,7 +70,7 @@ pub fn create(usable_stack_size_bytes: usize) !Stack {
     };
 }
 
-pub fn wipe(stack: Stack) !void {
+pub fn wipe(this: Stack) !void {
     // TODO: madvise(MADV_FREE) says the following in the FreeBSD man page:
     // "The next time that the page is referenced, the page might be demand zeroed,
     // or might contain the data that was there before the MADV_FREE call"
@@ -86,7 +86,7 @@ pub fn wipe(stack: Stack) !void {
     // it makes sense to advise that the pages can be freed, since a stack that grows
     // can consume core memory without much use to the system while it's idle in the pool.
     const ret = mman.madvise(
-        stack.vm_base_address,
+        this.vm_base_address,
         Stack.max_stack_size,
         mman.MADV_FREE,
     );
@@ -96,9 +96,9 @@ pub fn wipe(stack: Stack) !void {
     }
 }
 
-pub fn destroy(stack: Stack) void {
+pub fn destroy(this: Stack) void {
     const ret = mman.munmap(
-        stack.vm_base_address,
+        this.vm_base_address,
         max_stack_size,
     );
     assert(ret == 0);

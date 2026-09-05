@@ -6,25 +6,29 @@ const Coroutine = @import("Coroutine.zig");
 const Stack = @import("Stack.zig");
 const StackHeader = @import("StackHeader.zig");
 const IntrusiveStackList = @import("IntrusiveStackList.zig");
+const MinHeap = @import("MinHeap.zig");
 
 const Runtime = @This();
 
 clock: TimeProvider,
 ready_queue: IntrusiveStackList,
-wait_queue: StackTimerMinHeap,
+wait_queue: MinHeap,
 
 pub fn init(
+    alloc: std.mem.Allocator,
     clock: TimeProvider,
-) Runtime {
+) !Runtime {
     return .{
         .clock = clock,
         .ready_queue = .{},
+        .wait_queue = try .init(alloc, @shlExact(1, 16)),
     };
 }
 
-pub fn deinit(rt: *Runtime) void {
+pub fn deinit(this: *Runtime) void {
+    this.wait_queue.deinit();
     var stack: Stack = undefined;
-    while (rt.ready_queue.try_pop_front(&stack)) {
+    while (this.ready_queue.try_pop_front(&stack)) {
         stack.destroy();
     }
 }
@@ -34,36 +38,25 @@ const TimeProvider = struct {
     source: *const fn(clock_ud: ?*anyopaque) std.Io.Timestamp,
 };
 
-var counter: i64 = 0;
-fn counterTimeProvider(notused: ?*anyopaque) std.Io.Timestamp {
-    _ = notused;
-    const now = @atomicRmw(i64, &counter, .Add, 1, .monotonic);
-    return std.Io.Timestamp.fromNanoseconds(now);
-}
-const DefaultTimeProvider: TimeProvider = .{
-    .userdata = null,
-    .source = &counterTimeProvider,
-};
-
-pub fn spawn(rt: *Runtime, entrypoint: *const fn() void, args: anytype) !void {
+pub fn spawn(this: *Runtime, entrypoint: *const fn() void, args: anytype) !void {
     const stack = try Coroutine.create(entrypoint, args, .{});
-    rt.ready_queue.append_back(stack);
+    this.ready_queue.append_back(stack);
 }
 
-pub fn spawnWithError(rt: *Runtime, entrypoint: *const fn() anyerror!void, args: anytype) !void {
+pub fn spawnWithError(this: *Runtime, entrypoint: *const fn() anyerror!void, args: anytype) !void {
     const stack = try Coroutine.createWithError(entrypoint, args, .{});
-    rt.ready_queue.append_back(stack);
+    this.ready_queue.append_back(stack);
 }
 
-pub fn run(rt: *Runtime) !void {
-    _ = rt;
+pub fn run(this: *Runtime) !void {
+    _ = this;
 }
 
-fn step(rt: *Runtime) !void {
+fn step(this: *Runtime) !void {
     const queue_service_limit: usize = 32;
     var stack: Stack = undefined;
-    for (0..@min(queue_service_limit, rt.ready_queue.count)) |_| {
-        if(!rt.ready_queue.try_pop_front(&stack)) {
+    for (0..@min(queue_service_limit, this.ready_queue.count)) |_| {
+        if(!this.ready_queue.try_pop_front(&stack)) {
             break;
         }
 
@@ -76,7 +69,7 @@ fn step(rt: *Runtime) !void {
         switch (Coroutine.enter(stack)) {
             .created => unreachable,
             .running => unreachable,
-            .yielded => rt.ready_queue.append_back(stack),
+            .yielded => this.ready_queue.append_back(stack),
             .waiting => {
                 assert(stack.header().wait_info != null); // A coroutine with .waiting status *must* set header.wait_info to the desired operation
                 switch (stack.header().wait_info.?) {
@@ -88,7 +81,8 @@ fn step(rt: *Runtime) !void {
                         // TODO: When we add support for the io reactor, we should pre-allocate a batch of kevents and
                         // initialize them as we process coroutines. That way we can submit a batch of these events
                         // as a single syscall instead doing many.
-                        rt.wait_queue.add(rt.now(), duration, stack);
+                        const wake_at = std.Io.Timestamp.addDuration(this.now(), std.Io.Duration.fromNanoseconds(duration));
+                        this.wait_queue.add(wake_at, stack);
                     }
                 }
             },
@@ -113,13 +107,28 @@ fn step(rt: *Runtime) !void {
     }
 }
 
+fn now(this: *Runtime) std.Io.Timestamp {
+    return this.clock.source(this.clock.userdata);
+}
+
+var counter: i64 = 0;
+fn counterTimeProvider(notused: ?*anyopaque) std.Io.Timestamp {
+    _ = notused;
+    const val = @atomicRmw(i64, &counter, .Add, 1, .monotonic);
+    return std.Io.Timestamp.fromNanoseconds(val);
+}
+pub const DefaultTimeProvider: TimeProvider = .{
+    .userdata = null,
+    .source = &counterTimeProvider,
+};
+
 test "Runtime.deinit() should deallocate all coroutines in the ready queue" {
     const T = struct {
         fn testCoro() void {
             Coroutine.yield();
         }
     };
-    var rt: Runtime = .init(DefaultTimeProvider);
+    var rt: Runtime = try .init(std.testing.allocator, DefaultTimeProvider);
     try rt.spawn(T.testCoro, .{});
     try std.testing.expectEqual(1, rt.ready_queue.count);
     const stack = rt.ready_queue.head.?;
@@ -134,7 +143,7 @@ test "failed coroutines should stop the runtime, deallocate the failed coroutine
             return error.FailedCoroutinesShouldBeDeallocated;
         }
     };
-    var rt: Runtime = .init(DefaultTimeProvider);
+    var rt: Runtime = try .init(std.testing.allocator, DefaultTimeProvider);
     defer rt.deinit();
     try rt.spawnWithError(T.testCoro, .{});
     try std.testing.expectEqual(1, rt.ready_queue.count);
@@ -149,7 +158,7 @@ test "completed coroutines should be deallocated" {
     const T = struct {
         fn testCoro() void {}
     };
-    var rt: Runtime = .init(DefaultTimeProvider);
+    var rt: Runtime = try .init(std.testing.allocator, DefaultTimeProvider);
     defer rt.deinit();
     try rt.spawn(T.testCoro, .{});
     try std.testing.expectEqual(1, rt.ready_queue.count);
@@ -167,7 +176,7 @@ test "step() should not run continuations in the same cycle" {
             return error.NoContinuationsSameCycleTest;
         }
     };
-    var rt: Runtime = .init(DefaultTimeProvider);
+    var rt: Runtime = try .init(std.testing.allocator, DefaultTimeProvider);
     defer rt.deinit();
     try rt.spawnWithError(T.testCoro, .{});
     try rt.step();
