@@ -38,27 +38,36 @@ pub fn deinit(this: *MinHeap) void {
 
 pub fn insert(this: *MinHeap, when: std.Io.Timestamp, stack: Stack) !void {
     assert(when.nanoseconds <= std.math.maxInt(i64));
-    const index = this.getCount();
-    if (index == this.items.len) {
+    const count = this.getCount();
+    if (count + 1 == this.items.len) {
         return error.MinHeapFull;
     }
-    this.items[index] = .{
+    const insert_index = count + 1;
+    this.items[insert_index] = .{
         .when = @intCast(when.nanoseconds),
         .stack = stack.vm_base_address,
     };
-    this.setCount(index + 1);
-    this.minHeapify(index);
+    this.setCount(insert_index);
+    this.siftUp(insert_index);
 }
 
-pub fn extractMin(this: *MinHeap, stack: *Stack) bool {
+fn siftUp(this: *MinHeap, start_index: usize) void {
+    var i = start_index;
+    while (i > 1 and this.items[parentOf(i)].when > this.items[i].when) {
+        this.swap(parentOf(i), i);
+        i = parentOf(i);
+    }
+}
+
+pub fn popMin(this: *MinHeap, stack: *Stack) bool {
     const count = this.getCount();
     if (count == 0) {
         return false;
     }
 
-    const last_index = count - 1;
+    const last_index = count;
     this.swap(1, last_index);
-    this.setCount(last_index);
+    this.setCount(last_index - 1);
     this.minHeapify(1);
     stack.* = .{
         .vm_base_address = this.items[last_index].stack,
@@ -70,15 +79,16 @@ fn minHeapify(this: *MinHeap, i: usize) void {
     assert(i > 0);
     const l = leftOf(i);
     const r = rightOf(i);
+    const active_bound = this.getCount() + 1;
     var smallest: usize = undefined;
 
-    if (l < this.items.len and this.items[l].when < this.items[i].when) {
+    if (l < active_bound and this.items[l].when < this.items[i].when) {
         smallest = l;
     } else {
         smallest = i;
     }
 
-    if (r < this.items.len and this.items[r].when < this.items[smallest].when) {
+    if (r < active_bound and this.items[r].when < this.items[smallest].when) {
         smallest = r;
     }
 
@@ -87,6 +97,7 @@ fn minHeapify(this: *MinHeap, i: usize) void {
         this.minHeapify(smallest);
     }
 }
+
 fn swap(this: *MinHeap, i: usize, j: usize) void {
     assert(i > 0);
     assert(j > 0);
@@ -120,6 +131,146 @@ fn setCount(this: *MinHeap, count: usize) void {
     @as(*usize, @ptrCast(&this.items[0].when)).* = count;
 }
 
+fn testStack(id: usize) Stack {
+    return .{ .vm_base_address = @ptrFromInt(0x1000 + id * 16) };
+}
+
+fn testTimestamp(nanoseconds: i64) std.Io.Timestamp {
+    return std.Io.Timestamp.fromNanoseconds(nanoseconds);
+}
+
+fn assertPopMin(heap: *MinHeap, expected: Stack) !void { 
+    var actual = testStack(0);
+    try std.testing.expect(heap.popMin(&actual));
+    try std.testing.expectEqual(expected, actual);
+}
+
+fn assertEmpty(heap: *MinHeap) !void {
+    const unchanged = testStack(0);
+    var actual = unchanged;
+    try std.testing.expect(!heap.popMin(&actual));
+    try std.testing.expectEqual(unchanged, actual);
+    try std.testing.expectEqual(0, heap.getCount());
+}
+
+test "init() creates an empty heap and deinit() releases its allocation" {
+    var heap = try MinHeap.init(std.testing.allocator, 4);
+    defer heap.deinit();
+
+    try assertEmpty(&heap);
+}
+
+test "init() propagates allocation failures" {
+    var failing_allocator = std.testing.FailingAllocator.init(std.testing.allocator, .{
+        .fail_index = 0,
+    });
+
+    try std.testing.expectError(
+        error.OutOfMemory,
+        MinHeap.init(failing_allocator.allocator(), 4),
+    );
+}
+
+test "insert() and popMin() handle a single item" {
+    var heap = try MinHeap.init(std.testing.allocator, 4);
+    defer heap.deinit();
+
+    const expected = testStack(1);
+    try heap.insert(testTimestamp(42), expected);
+    try assertPopMin(&heap, expected);
+    try assertEmpty(&heap);
+}
+
+test "popMin() returns stacks in ascending order" {
+    var heap = try MinHeap.init(std.testing.allocator, 16);
+    defer heap.deinit();
+
+    const entries = [_]struct { when: i64, stack: Stack }{
+        .{ .when = 5, .stack = testStack(5) },
+        .{ .when = 3, .stack = testStack(3) },
+        .{ .when = 4, .stack = testStack(4) },
+        .{ .when = 1, .stack = testStack(1) },
+        .{ .when = 2, .stack = testStack(2) },
+        .{ .when = 6, .stack = testStack(6) },
+    };
+
+    for (entries) |entry| {
+        try heap.insert(testTimestamp(entry.when), entry.stack);
+    }
+
+    for (1..7) |i| {
+        const expected = testStack(i);
+        try assertPopMin(&heap, expected);
+    }
+    try assertEmpty(&heap);
+}
+
+test "insert() preserves all entries with equal deadlines" {
+    var heap = try MinHeap.init(std.testing.allocator, 8);
+    defer heap.deinit();
+
+    const entries = [_]Stack{
+        testStack(1),
+        testStack(2),
+        testStack(3),
+        testStack(4),
+    };
+    for (entries) |stack| {
+        try heap.insert(testTimestamp(100), stack);
+    }
+
+    var seen = [_]bool{false} ** entries.len;
+    for (entries) |_| {
+        var actual = testStack(0);
+        try std.testing.expect(heap.popMin(&actual));
+
+        var found = false;
+        for (entries, 0..) |expected, index| {
+            if (!seen[index] and actual.vm_base_address == expected.vm_base_address) {
+                seen[index] = true;
+                found = true;
+                break;
+            }
+        }
+        try std.testing.expect(found);
+    }
+    for (seen) |was_seen| {
+        try std.testing.expect(was_seen);
+    }
+    try assertEmpty(&heap);
+}
+
+test "insert() reports MinHeapFull and retains existing entries" {
+    const capacity = 8;
+    var heap = try MinHeap.init(std.testing.allocator, capacity);
+    defer heap.deinit();
+
+    var inserted: usize = 0;
+    var reached_capacity = false;
+    for (0..capacity + 1) |_| {
+        const id = inserted + 1;
+        if (heap.insert(testTimestamp(@intCast(id)), testStack(id))) |_| {
+            inserted = id;
+        } else |err| {
+            try std.testing.expectEqual(error.MinHeapFull, err);
+            reached_capacity = true;
+            break;
+        }
+    }
+    try std.testing.expect(reached_capacity);
+    try std.testing.expect(inserted > 0);
+
+    try std.testing.expectError(
+        error.MinHeapFull,
+        heap.insert(testTimestamp(0), testStack(inserted + 1)),
+    );
+    for (1..inserted + 1) |id| {
+        const expected = testStack(id);
+        try assertPopMin(&heap, expected);
+    }
+    try assertEmpty(&heap);
+}
+
 test "valid parentOf()/leftOf()/rightOf() test matrix" {
     //            1
     //     2               3
@@ -147,4 +298,3 @@ test "valid parentOf()/leftOf()/rightOf() test matrix" {
         try std.testing.expectEqual(parent, parentOf(right));
     }
 }
-
