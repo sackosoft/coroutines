@@ -11,6 +11,7 @@ const Runtime = @This();
 
 clock: TimeProvider,
 ready_queue: IntrusiveStackList,
+wait_queue: StackTimerMinHeap,
 
 pub fn init(
     clock: TimeProvider,
@@ -76,7 +77,21 @@ fn step(rt: *Runtime) !void {
             .created => unreachable,
             .running => unreachable,
             .yielded => rt.ready_queue.append_back(stack),
-            .waiting => unreachable, // TODO: Interpret wait request and dispatch appropriate syscalls.
+            .waiting => {
+                assert(stack.header().wait_info != null); // A coroutine with .waiting status *must* set header.wait_info to the desired operation
+                switch (stack.header().wait_info.?) {
+                    .fixed_interval_delay_in_ns => |duration| {
+                        // TODO: Should waits be registered with the IO Reactor (like kqueue)? I think probably yes.
+                        // TODO: I think it makes sense to be able to schedule a recurring coroutine which is triggered
+                        // on a stable interval. I feel like wiring that into the reactor is simpler than managing our
+                        // own wait queue.
+                        // TODO: When we add support for the io reactor, we should pre-allocate a batch of kevents and
+                        // initialize them as we process coroutines. That way we can submit a batch of these events
+                        // as a single syscall instead doing many.
+                        rt.wait_queue.add(rt.now(), duration, stack);
+                    }
+                }
+            },
             .failed => {
                 // TODO: Should an error halt the runtime? Should an error be propagated upwards?
                 // Or should we let the user provide an error callback handler? I'm leaning toward

@@ -41,6 +41,13 @@ pub const CallConvention = enum (u8) {
     returns_anyerror_union_void = 1,
 };
 
+pub const WaitKind = enum {
+    fixed_interval_delay_in_ns,
+};
+pub const WaitInfo = union (WaitKind) {
+    fixed_interval_delay_in_ns: u64,
+};
+
 pub const max_allows_args: comptime_int = @typeInfo(@FieldType(@This(), "args")).array.len;
 
 /// The suspended context of whatever external code switched into this coroutine (a
@@ -94,6 +101,9 @@ call_convention: CallConvention,
 /// always has a value when the coroutine enters the 'failed' status, and is always null
 /// for any other status.
 failure: ?anyerror = null,
+
+/// Non-null if and only if `status` is set to `.waiting`.
+wait_info: ?WaitInfo = null,
 
 /// Used by schedulers or other external runtimes to create an intrusive singly linked
 /// list of stacks, instead of allocating and managing data structures separately.
