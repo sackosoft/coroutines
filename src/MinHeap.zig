@@ -35,44 +35,36 @@ pub fn deinit(this: *MinHeap) void {
     this.alloc.free(this.items);
 }
 
-pub fn add(this: *MinHeap, when: std.Io.Timestamp, stack: Stack) void {
+pub fn insert(this: *MinHeap, when: std.Io.Timestamp, stack: Stack) void {
     assert(when.nanoseconds <= std.math.maxInt(i64));
 
     _ = this;
     _ = stack;
 }
 
-fn leftOf(heap_size: usize, i: usize, result: *usize) bool {
-    assert(i > 0);
-    assert(isValidHeapSize(heap_size));
-    if (i >= (heap_size / 2)) {
-        return false;
-    }
-
-    result.* = 2 * i;
-    return true;
+pub fn extractMin(this: *MinHeap, stack: *Stack) bool {
+    _ = this;
+    _ = stack;
+    return false;
 }
 
-fn rightOf(heap_size: usize, i: usize, result: *usize) bool {
+fn maxHeapify(i: usize) void {
     assert(i > 0);
-    assert(isValidHeapSize(heap_size));
-    if (i >= (heap_size / 2)) {
-        return false;
-    }
-
-    result.* = 2 * i + 1;
-    return true;
 }
 
-fn parentOf(i: usize, result: *usize) bool {
+fn leftOf(i: usize) usize {
     assert(i > 0);
-    if (i <= 1) {
-        return false;
-    }
+    return 2 * i;
+}
 
-    const parent = i / 2;
-    result.* = parent;
-    return true;
+fn rightOf(i: usize) usize {
+    assert(i > 0);
+    return 2 * i + 1;
+}
+
+fn parentOf(i: usize) usize {
+    assert(i > 0);
+    return i / 2;
 }
 
 fn isValidHeapSize(v: usize) bool {
@@ -103,55 +95,16 @@ test "valid parentOf()/leftOf()/rightOf() test matrix" {
         .{7, 14, 15},
     };
 
-    var actual: usize = undefined;
     for (test_cases) |test_case| {
         var parent: usize = undefined;
         var left: usize = undefined;
         var right: usize = undefined;
         parent, left, right = test_case;
 
-        try std.testing.expect(leftOf(512, parent, &actual));
-        try std.testing.expectEqual(left, actual);
-
-        try std.testing.expect(rightOf(512, parent, &actual));
-        try std.testing.expectEqual(right, actual);
-
-        try std.testing.expect(parentOf(left, &actual));
-        try std.testing.expectEqual(parent, actual);
-
-        try std.testing.expect(parentOf(right, &actual));
-        try std.testing.expectEqual(parent, actual);
-    }
-}
-
-
-test "parentOf() refuses to find parent of root element" {
-    var actual: usize = undefined;
-    try std.testing.expect(!parentOf(1, &actual));
-}
-
-
-test "leftOf() and rightOf() refuse to find children for leaf nodes" {
-    //            1
-    //     2               3
-    //  4     5        6      7
-    // 8 9  10 11    12 13  14 15
-    const heap_size: usize = 16;
-    const leaf_nodes_indices = [_]usize{
-        8,
-        9,
-        10,
-        11,
-        12,
-        13,
-        14,
-        15,
-    };
-
-    var actual: usize = undefined;
-    for (leaf_nodes_indices) |leaf_node_index| {
-        try std.testing.expect(!leftOf(heap_size, leaf_node_index, &actual));
-        try std.testing.expect(!rightOf(heap_size, leaf_node_index, &actual));
+        try std.testing.expectEqual(left, leftOf(parent));
+        try std.testing.expectEqual(right, rightOf(parent));
+        try std.testing.expectEqual(parent, parentOf(left));
+        try std.testing.expectEqual(parent, parentOf(right));
     }
 }
 

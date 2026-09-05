@@ -82,7 +82,7 @@ fn step(this: *Runtime) !void {
                         // initialize them as we process coroutines. That way we can submit a batch of these events
                         // as a single syscall instead doing many.
                         const wake_at = std.Io.Timestamp.addDuration(this.now(), std.Io.Duration.fromNanoseconds(duration));
-                        this.wait_queue.add(wake_at, stack);
+                        this.wait_queue.insert(wake_at, stack);
                     }
                 }
             },
