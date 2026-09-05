@@ -21,7 +21,7 @@ pub fn init(
     return .{
         .clock = clock,
         .ready_queue = .{},
-        .wait_queue = try .init(alloc, @shlExact(1, 16)),
+        .wait_queue = try .init(alloc, 8_192),
     };
 }
 
