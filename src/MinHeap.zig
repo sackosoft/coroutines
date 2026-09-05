@@ -68,14 +68,14 @@ pub fn popMin(this: *MinHeap, stack: *Stack) bool {
     const last_index = count;
     this.swap(1, last_index);
     this.setCount(last_index - 1);
-    this.minHeapify(1);
+    this.siftDown(1);
     stack.* = .{
         .vm_base_address = this.items[last_index].stack,
     };
     return true;
 }
 
-fn minHeapify(this: *MinHeap, i: usize) void {
+fn siftDown(this: *MinHeap, i: usize) void {
     assert(i > 0);
     const l = leftOf(i);
     const r = rightOf(i);
@@ -94,7 +94,7 @@ fn minHeapify(this: *MinHeap, i: usize) void {
 
     if (smallest != i) {
         this.swap(i, smallest);
-        this.minHeapify(smallest);
+        this.siftDown(smallest);
     }
 }
 
