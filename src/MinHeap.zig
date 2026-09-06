@@ -72,6 +72,14 @@ pub fn popMin(this: *MinHeap, stack: *Stack) bool {
     return true;
 }
 
+pub fn popMinNotAfter(this: *MinHeap, timestamp: std.Io.Timestamp, stack: *Stack) bool {
+    if (this.items[1].when <= timestamp.nanoseconds) {
+        return this.popMin(stack);
+    }
+
+    return false;
+}
+
 // TODO: I think it would make sense to comptle-time specialize MinHeap so functions like "siftDown" can use
 // stack-allocated memory with comptime-known maxiumum level of recursion, bounded by the height of the tree.
 // Then we can avoid the recursion and use a simple loop.
@@ -123,6 +131,10 @@ fn parentOf(i: usize) usize {
     return i / 2;
 }
 
+pub fn getCount(this: *MinHeap) usize {
+    return this.count().*;
+}
+
 fn count(this: *MinHeap) *usize {
     return @as(*usize, @ptrCast(&this.items[0].when));
 }
@@ -138,6 +150,12 @@ fn testTimestamp(nanoseconds: i64) std.Io.Timestamp {
 fn assertPopMin(heap: *MinHeap, expected: Stack) !void { 
     var actual = testStack(0);
     try std.testing.expect(heap.popMin(&actual));
+    try std.testing.expectEqual(expected, actual);
+}
+
+fn assertPopMinNotAfter(heap: *MinHeap, timestamp: i96, expected: Stack) !void { 
+    var actual = testStack(0);
+    try std.testing.expect(heap.popMinNotAfter(std.Io.Timestamp.fromNanoseconds(timestamp), &actual));
     try std.testing.expectEqual(expected, actual);
 }
 
@@ -199,6 +217,30 @@ test "popMin() returns stacks in ascending order" {
         try assertPopMin(&heap, expected);
     }
     try assertEmpty(&heap);
+}
+
+test "popMinBefore() returns stacks in ascending order until threshold" {
+    var heap = try MinHeap.init(std.testing.allocator, 16);
+    defer heap.deinit();
+
+    const entries = [_]struct { when: i64, stack: Stack }{
+        .{ .when = 5, .stack = testStack(5) },
+        .{ .when = 3, .stack = testStack(3) },
+        .{ .when = 4, .stack = testStack(4) },
+        .{ .when = 1, .stack = testStack(1) },
+        .{ .when = 2, .stack = testStack(2) },
+        .{ .when = 6, .stack = testStack(6) },
+    };
+
+    for (entries) |entry| {
+        try heap.insert(testTimestamp(entry.when), entry.stack);
+    }
+
+    try assertPopMinNotAfter(&heap, 4, testStack(1));
+    try assertPopMinNotAfter(&heap, 4, testStack(2));
+    try assertPopMinNotAfter(&heap, 4, testStack(3));
+    try assertPopMinNotAfter(&heap, 4, testStack(4));
+    try std.testing.expect(heap.count().* == 2);
 }
 
 test "insert() preserves all entries with equal deadlines" {

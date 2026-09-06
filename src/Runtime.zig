@@ -53,8 +53,15 @@ pub fn run(this: *Runtime) !void {
 }
 
 fn step(this: *Runtime) !void {
-    const queue_service_limit: usize = 32;
     var stack: Stack = undefined;
+    while (this.wait_queue.popMinNotAfter(this.now(), &stack)) {
+        const header = stack.header();
+        header.status = .yielded;
+        header.wait_info = null;
+        this.ready_queue.append_back(stack);
+    }
+
+    const queue_service_limit: usize = 32;
     for (0..@min(queue_service_limit, this.ready_queue.count)) |_| {
         if(!this.ready_queue.try_pop_front(&stack)) {
             break;
@@ -186,5 +193,23 @@ test "step() should not run continuations in the same cycle" {
     try std.testing.expectEqual(StackHeader.Status.failed, result);
     try std.testing.expectEqual(StackHeader.Status.failed, rt.ready_queue.head.?.header().status);
     try std.testing.expectEqual(error.NoContinuationsSameCycleTest, rt.ready_queue.head.?.header().failure.?);
+}
+
+
+test "step() should wake ready timer-waiting coroutines and run them" {
+    const T = struct {
+        fn testCoro() void {
+            Coroutine.sleepNanoseconds(1);
+        }
+    };
+    var rt: Runtime = try .init(std.testing.allocator, DefaultTimeProvider);
+    defer rt.deinit();
+    try rt.spawn(T.testCoro, .{});
+    try std.testing.expectEqual(1, rt.ready_queue.count);
+    try rt.step();
+    try std.testing.expectEqual(1, rt.wait_queue.getCount());
+    try rt.step();
+    try std.testing.expectEqual(0, rt.ready_queue.count);
+    try std.testing.expectEqual(0, rt.wait_queue.getCount());
 }
 

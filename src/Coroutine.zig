@@ -61,6 +61,17 @@ pub fn yield() void {
     assert(header.status == .running);
     header.status = .yielded;
     assert(header.ext_sp != null);
+    assert(header.coro_sp == null);
+    backend.ctx_switch(&header.coro_sp, &header.ext_sp);
+}
+
+pub fn sleepNanoseconds(ns: u64) void {
+    const header = backend.locate_header();
+    assert(header.status == .running);
+    header.status = .waiting;
+    header.wait_info = .{ .fixed_interval_delay_in_ns = ns };
+    assert(header.ext_sp != null);
+    assert(header.coro_sp == null);
     backend.ctx_switch(&header.coro_sp, &header.ext_sp);
 }
 
