@@ -49,7 +49,9 @@ pub fn spawnWithError(this: *Runtime, entrypoint: *const fn() anyerror!void, arg
 }
 
 pub fn run(this: *Runtime) !void {
-    _ = this;
+    while (this.ready_queue.count > 0 or this.wait_queue.getCount() > 0) {
+        try this.step();
+    }
 }
 
 fn step(this: *Runtime) !void {
@@ -222,7 +224,6 @@ test "step() should wake ready timer-waiting coroutines and run them" {
 test "step() sleeping coroutines should be ignored until their timer expires" {
     const T = struct {
         fn sleepCoro() void {
-            // Reminder: the default time provider is an atomic nanoseconds counter :)
             Coroutine.sleepNanoseconds(5);
         }
         fn activeCoro() void {
@@ -257,3 +258,55 @@ test "step() sleeping coroutines should be ignored until their timer expires" {
     try std.testing.expectEqual(0, rt.wait_queue.getCount());
     try std.testing.expectEqual(0, rt.ready_queue.count);
 }
+
+test "run() drains all coroutine queues before returning" {
+    const T = struct {
+        fn sleepCoro() void {
+            Coroutine.sleepNanoseconds(5);
+        }
+        fn activeCoro() void {
+            Coroutine.yield();
+            Coroutine.yield();
+            Coroutine.yield();
+            Coroutine.yield();
+            Coroutine.yield();
+        }
+    };
+    var rt: Runtime = try .init(std.testing.allocator, DefaultTimeProvider);
+    defer rt.deinit();
+    try rt.spawn(T.sleepCoro, .{});
+    try rt.spawn(T.activeCoro, .{});
+    try rt.spawn(T.sleepCoro, .{});
+    try rt.spawn(T.activeCoro, .{});
+    try rt.spawn(T.sleepCoro, .{});
+    try rt.spawn(T.activeCoro, .{});
+    try rt.run();
+    try std.testing.expectEqual(0, rt.wait_queue.getCount());
+    try std.testing.expectEqual(0, rt.ready_queue.count);
+}
+
+test "run() halts execution and propagates failed coroutine errors to caller and can be resumed afterward" {
+    var side_effect: bool = false;
+    const T = struct {
+        fn errorCoro() !void {
+            return error.ErrorCoroHaltExecution;
+        }
+        fn deferredCoro() void {
+            const side_effect_ptr = Coroutine.arg0(*bool);
+            side_effect_ptr.* = true;
+        }
+    };
+    var rt: Runtime = try .init(std.testing.allocator, DefaultTimeProvider);
+    defer rt.deinit();
+    try rt.spawnWithError(T.errorCoro, .{});
+    try rt.spawn(T.deferredCoro, .{&side_effect});
+    try std.testing.expectError(error.ErrorCoroHaltExecution, rt.run());
+    try std.testing.expect(!side_effect);
+    try std.testing.expectEqual(0, rt.wait_queue.getCount());
+    try std.testing.expectEqual(1, rt.ready_queue.count);
+    try rt.run();
+    try std.testing.expect(side_effect);
+    try std.testing.expectEqual(0, rt.wait_queue.getCount());
+    try std.testing.expectEqual(0, rt.ready_queue.count);
+}
+
