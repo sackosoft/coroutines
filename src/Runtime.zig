@@ -54,7 +54,9 @@ pub fn run(this: *Runtime) !void {
 
 fn step(this: *Runtime) !void {
     var stack: Stack = undefined;
-    while (this.wait_queue.popMinNotAfter(this.now(), &stack)) {
+
+    const wait_queue_now = this.now();
+    while (this.wait_queue.popMinNotAfter(wait_queue_now, &stack)) {
         const header = stack.header();
         header.status = .yielded;
         header.wait_info = null;
@@ -88,6 +90,11 @@ fn step(this: *Runtime) !void {
                         // TODO: When we add support for the io reactor, we should pre-allocate a batch of kevents and
                         // initialize them as we process coroutines. That way we can submit a batch of these events
                         // as a single syscall instead doing many.
+                        // Note: Always pull a new timestamp instead of using a shared `step()` level timestamp. Using
+                        // a shared timestamp makes sense in a lot of cases, but it cannot be used for setting the
+                        // sleep data for a coroutine. Doing so could cause the coroutine to wake unexpectedly early,
+                        // depending on how much time was spent after the shared timestamp was taken within coroutine
+                        // functions.
                         const wake_at = std.Io.Timestamp.addDuration(this.now(), std.Io.Duration.fromNanoseconds(duration));
                         try this.wait_queue.insert(wake_at, stack);
                     }
@@ -118,10 +125,10 @@ fn now(this: *Runtime) std.Io.Timestamp {
     return this.clock.source(this.clock.userdata);
 }
 
-var counter: i64 = 0;
+var defaultTimeProviderNanosecondsCounter: i64 = 0;
 fn counterTimeProvider(notused: ?*anyopaque) std.Io.Timestamp {
     _ = notused;
-    const val = @atomicRmw(i64, &counter, .Add, 1, .monotonic);
+    const val = @atomicRmw(i64, &defaultTimeProviderNanosecondsCounter, .Add, 1, .monotonic);
     return std.Io.Timestamp.fromNanoseconds(val);
 }
 pub const DefaultTimeProvider: TimeProvider = .{
@@ -195,7 +202,6 @@ test "step() should not run continuations in the same cycle" {
     try std.testing.expectEqual(error.NoContinuationsSameCycleTest, rt.ready_queue.head.?.header().failure.?);
 }
 
-
 test "step() should wake ready timer-waiting coroutines and run them" {
     const T = struct {
         fn testCoro() void {
@@ -213,3 +219,41 @@ test "step() should wake ready timer-waiting coroutines and run them" {
     try std.testing.expectEqual(0, rt.wait_queue.getCount());
 }
 
+test "step() sleeping coroutines should be ignored until their timer expires" {
+    const T = struct {
+        fn sleepCoro() void {
+            // Reminder: the default time provider is an atomic nanoseconds counter :)
+            Coroutine.sleepNanoseconds(5);
+        }
+        fn activeCoro() void {
+            Coroutine.yield();
+            Coroutine.yield();
+            Coroutine.yield();
+            Coroutine.yield();
+            Coroutine.yield();
+        }
+    };
+    var rt: Runtime = try .init(std.testing.allocator, DefaultTimeProvider);
+    defer rt.deinit();
+    try rt.spawn(T.sleepCoro, .{});
+    try rt.spawn(T.activeCoro, .{});
+    try std.testing.expectEqual(2, rt.ready_queue.count);
+    try rt.step();
+    try std.testing.expectEqual(1, rt.wait_queue.getCount());
+    try std.testing.expectEqual(1, rt.ready_queue.count);
+    try rt.step();
+    try std.testing.expectEqual(1, rt.wait_queue.getCount());
+    try std.testing.expectEqual(1, rt.ready_queue.count);
+    try rt.step();
+    try std.testing.expectEqual(1, rt.wait_queue.getCount());
+    try std.testing.expectEqual(1, rt.ready_queue.count);
+    try rt.step();
+    try std.testing.expectEqual(1, rt.wait_queue.getCount());
+    try std.testing.expectEqual(1, rt.ready_queue.count);
+    try rt.step();
+    try std.testing.expectEqual(1, rt.wait_queue.getCount());
+    try std.testing.expectEqual(1, rt.ready_queue.count);
+    try rt.step();
+    try std.testing.expectEqual(0, rt.wait_queue.getCount());
+    try std.testing.expectEqual(0, rt.ready_queue.count);
+}
