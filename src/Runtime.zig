@@ -26,16 +26,25 @@ pub fn init(
 }
 
 pub fn deinit(this: *Runtime) void {
-    this.wait_queue.deinit();
     var stack: Stack = undefined;
+    while (this.wait_queue.popMin(&stack)) {
+        stack.destroy();
+    }
+    this.wait_queue.deinit();
+
     while (this.ready_queue.try_pop_front(&stack)) {
         stack.destroy();
     }
 }
 
-const TimeProvider = struct {
+pub const TimeProvider = struct {
     userdata: ?*anyopaque = null,
     source: *const fn(clock_ud: ?*anyopaque) std.Io.Timestamp,
+};
+
+// TODO: This needs to be wired up to the runtime and used as specified in ../tasks/009-
+pub const SleepProvider = struct {
+    source: *const fn(sleep_duration: u64) void,
 };
 
 pub fn spawn(this: *Runtime, entrypoint: *const fn() void, args: anytype) !void {
@@ -148,6 +157,22 @@ test "Runtime.deinit() should deallocate all coroutines in the ready queue" {
     try rt.spawn(T.testCoro, .{});
     try std.testing.expectEqual(1, rt.ready_queue.count);
     const stack = rt.ready_queue.head.?;
+    try Stack.assertStackMapped(stack);
+    rt.deinit();
+    try Stack.assertStackNotMapped(stack);
+}
+
+test "Runtime.deinit() should deallocate all coroutines in the wait queue" {
+    const T = struct {
+        fn sleepCoro() void {
+            Coroutine.sleepNanoseconds(1000);
+        }
+    };
+    var rt: Runtime = try .init(std.testing.allocator, DefaultTimeProvider);
+    try rt.spawn(T.sleepCoro, .{});
+    try rt.step();
+    try std.testing.expectEqual(1, rt.wait_queue.getCount());
+    const stack: Stack = .{ .vm_base_address = rt.wait_queue.items[1].stack};
     try Stack.assertStackMapped(stack);
     rt.deinit();
     try Stack.assertStackNotMapped(stack);
