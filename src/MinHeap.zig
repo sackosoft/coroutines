@@ -38,21 +38,18 @@ pub fn deinit(this: *MinHeap) void {
 
 pub fn insert(this: *MinHeap, when: std.Io.Timestamp, stack: Stack) !void {
     assert(when.nanoseconds <= std.math.maxInt(i64));
-    const count = this.getCount();
-    if (count + 1 == this.items.len) {
+    assert(when.nanoseconds >= std.math.minInt(i64));
+    var i = this.count().* + 1;
+    if (i == this.items.len) {
         return error.MinHeapFull;
     }
-    const insert_index = count + 1;
-    this.items[insert_index] = .{
+    this.items[i] = .{
         .when = @intCast(when.nanoseconds),
         .stack = stack.vm_base_address,
     };
-    this.setCount(insert_index);
-    this.siftUp(insert_index);
-}
+    this.count().* = i;
 
-fn siftUp(this: *MinHeap, start_index: usize) void {
-    var i = start_index;
+    // Sift up
     while (i > 1 and this.items[parentOf(i)].when > this.items[i].when) {
         this.swap(parentOf(i), i);
         i = parentOf(i);
@@ -60,14 +57,14 @@ fn siftUp(this: *MinHeap, start_index: usize) void {
 }
 
 pub fn popMin(this: *MinHeap, stack: *Stack) bool {
-    const count = this.getCount();
-    if (count == 0) {
+    const current_count = this.count().*;
+    if (current_count == 0) {
         return false;
     }
 
-    const last_index = count;
+    const last_index = current_count;
     this.swap(1, last_index);
-    this.setCount(last_index - 1);
+    this.count().* = last_index - 1;
     this.siftDown(1);
     stack.* = .{
         .vm_base_address = this.items[last_index].stack,
@@ -75,11 +72,14 @@ pub fn popMin(this: *MinHeap, stack: *Stack) bool {
     return true;
 }
 
+// TODO: I think it would make sense to comptle-time specialize MinHeap so functions like "siftDown" can use
+// stack-allocated memory with comptime-known maxiumum level of recursion, bounded by the height of the tree.
+// Then we can avoid the recursion and use a simple loop.
 fn siftDown(this: *MinHeap, i: usize) void {
     assert(i > 0);
     const l = leftOf(i);
     const r = rightOf(i);
-    const active_bound = this.getCount() + 1;
+    const active_bound = this.count().* + 1;
     var smallest: usize = undefined;
 
     if (l < active_bound and this.items[l].when < this.items[i].when) {
@@ -123,12 +123,8 @@ fn parentOf(i: usize) usize {
     return i / 2;
 }
 
-fn getCount(this: *MinHeap) usize {
-    return @as(*usize, @ptrCast(&this.items[0].when)).*;
-}
-
-fn setCount(this: *MinHeap, count: usize) void {
-    @as(*usize, @ptrCast(&this.items[0].when)).* = count;
+fn count(this: *MinHeap) *usize {
+    return @as(*usize, @ptrCast(&this.items[0].when));
 }
 
 fn testStack(id: usize) Stack {
@@ -150,7 +146,7 @@ fn assertEmpty(heap: *MinHeap) !void {
     var actual = unchanged;
     try std.testing.expect(!heap.popMin(&actual));
     try std.testing.expectEqual(unchanged, actual);
-    try std.testing.expectEqual(0, heap.getCount());
+    try std.testing.expectEqual(0, heap.count().*);
 }
 
 test "init() creates an empty heap and deinit() releases its allocation" {
