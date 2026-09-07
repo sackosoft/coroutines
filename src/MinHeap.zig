@@ -72,6 +72,13 @@ pub fn popMin(this: *MinHeap, stack: *Stack) bool {
     return true;
 }
 
+pub fn peek(this: *MinHeap) ?std.Io.Timestamp {
+    if (this.getCount() == 0) {
+        return null;
+    }
+    return std.Io.Timestamp.fromNanoseconds(@intCast(this.items[1].when));
+}
+
 pub fn popMinNotAfter(this: *MinHeap, timestamp: std.Io.Timestamp, stack: *Stack) bool {
     if (this.items[1].when <= timestamp.nanoseconds) {
         return this.popMin(stack);
@@ -193,6 +200,38 @@ test "insert() and popMin() handle a single item" {
     try heap.insert(testTimestamp(42), expected);
     try assertPopMin(&heap, expected);
     try assertEmpty(&heap);
+}
+
+test "peek() returns null when heap is empty" {
+    var heap = try MinHeap.init(std.testing.allocator, 16);
+    defer heap.deinit();
+
+    try std.testing.expect(heap.peek() == null);
+}
+
+test "peek() returns lowest timestamp" {
+    const Entry = struct { when: i64, stack: Stack, expected_min: i64 };
+    const entries = [_]Entry{
+        .{ .when = 4, .stack = testStack(4), .expected_min = 4 },
+        .{ .when = 2, .stack = testStack(2), .expected_min = 2 },
+        .{ .when = 3, .stack = testStack(3), .expected_min = 2 },
+        .{ .when = 1, .stack = testStack(1), .expected_min = 1 },
+        .{ .when = 0, .stack = testStack(0), .expected_min = 0 },
+        .{ .when = 5, .stack = testStack(5), .expected_min = 0 },
+    };
+
+    for (0..entries.len) |i| {
+        var heap = try MinHeap.init(std.testing.allocator, 16);
+        defer heap.deinit();
+
+        var entry: Entry = undefined;
+        for(0..i+1) |j| {
+            entry = entries[j];
+            try heap.insert(testTimestamp(entry.when), entry.stack);
+        }
+
+        try std.testing.expectEqual(testTimestamp(entry.expected_min), heap.peek().?);
+    }
 }
 
 test "popMin() returns stacks in ascending order" {

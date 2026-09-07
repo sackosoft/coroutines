@@ -11,18 +11,25 @@ const MinHeap = @import("MinHeap.zig");
 const Runtime = @This();
 
 clock: TimeProvider,
+sleep_provider: SleepProvider,
 ready_queue: IntrusiveStackList,
 wait_queue: MinHeap,
 
 pub fn init(
     alloc: std.mem.Allocator,
     clock: TimeProvider,
+    sleep_provider: SleepProvider,
 ) !Runtime {
     return .{
         .clock = clock,
+        .sleep_provider = sleep_provider,
         .ready_queue = .{},
         .wait_queue = try .init(alloc, 8_192),
     };
+}
+
+pub fn initDefault(alloc: std.mem.Allocator) !Runtime {
+    return try .init(alloc, DefaultTimeProvider, DefaultSleepProvider);
 }
 
 pub fn deinit(this: *Runtime) void {
@@ -44,7 +51,8 @@ pub const TimeProvider = struct {
 
 // TODO: This needs to be wired up to the runtime and used as specified in ../tasks/009-
 pub const SleepProvider = struct {
-    source: *const fn(sleep_duration: u64) void,
+    context: ?*anyopaque = null,
+    source: *const fn(context: ?*anyopaque, std.Io.Duration) error{SleepInterrupted}!void,
 };
 
 pub fn spawn(this: *Runtime, entrypoint: *const fn() void, args: anytype) !void {
@@ -64,9 +72,16 @@ pub fn run(this: *Runtime) !void {
 }
 
 fn step(this: *Runtime) !void {
-    var stack: Stack = undefined;
+    var wait_queue_now = this.now();
+    if (this.wait_queue.peek()) |upcoming| {
+        const until_upcoming = wait_queue_now.durationTo(upcoming);
+        if (this.ready_queue.count == 0 and until_upcoming.nanoseconds > 0) {
+            try this.sleep(until_upcoming.nanoseconds);
+            wait_queue_now = this.now();
+        }
+    }
 
-    const wait_queue_now = this.now();
+    var stack: Stack = undefined;
     while (this.wait_queue.popMinNotAfter(wait_queue_now, &stack)) {
         const header = stack.header();
         header.status = .yielded;
@@ -136,15 +151,57 @@ fn now(this: *Runtime) std.Io.Timestamp {
     return this.clock.source(this.clock.userdata);
 }
 
+fn sleep(this: *Runtime, duration_ns: i96) !void {
+    try this.sleep_provider.source(
+        this.sleep_provider.context,
+        std.Io.Duration.fromNanoseconds(duration_ns),
+    );
+}
+
 var defaultTimeProviderNanosecondsCounter: i64 = 0;
 fn counterTimeProvider(notused: ?*anyopaque) std.Io.Timestamp {
     _ = notused;
-    const val = @atomicRmw(i64, &defaultTimeProviderNanosecondsCounter, .Add, 1, .monotonic);
-    return std.Io.Timestamp.fromNanoseconds(val);
+    const nanosecondsCounter: *i64 = &defaultTimeProviderNanosecondsCounter;
+    nanosecondsCounter.* += 1;
+    return std.Io.Timestamp.fromNanoseconds(nanosecondsCounter.*);
 }
 pub const DefaultTimeProvider: TimeProvider = .{
     .userdata = null,
     .source = &counterTimeProvider,
+};
+
+fn counterSleepProvider(context: ?*anyopaque, duration: std.Io.Duration) error{SleepInterrupted}!void {
+    _ = context;
+    const nanosecondsCounter: *i64 = &defaultTimeProviderNanosecondsCounter;
+    assert(duration.nanoseconds < std.math.maxInt(i64));
+    nanosecondsCounter.* += @intCast(duration.nanoseconds);
+}
+pub const DefaultSleepProvider: SleepProvider = .{
+    .context = &defaultTimeProviderNanosecondsCounter,
+    .source = &counterSleepProvider,
+};
+
+fn libcSleepProvider(context: ?*anyopaque, duration: std.Io.Duration) error{SleepInterrupted}!void {
+    var wait_duration: std.c.timespec = .{
+        .sec = @intCast(duration.nanoseconds / std.time.ns_per_s),
+        .nsec = @intCast(duration.nanoseconds % std.time.ns_per_s),
+    };
+    var unslept_amount: std.c.timespec = .{ .sec = 0, .nsec = 0 };
+    assert(context == null);
+    const ret = std.c.clock_nanosleep(
+        std.c.clockid_t.MONOTONIC,
+        0,
+        &wait_duration,
+        &unslept_amount,
+    );
+    if (ret != 0) {
+        assert(unslept_amount.sec != 0 or unslept_amount.nsec != 0);
+        return error.SleepInterrupted;
+    }
+}
+pub const SyscallSleepProvider: SleepProvider = .{
+    .context = null,
+    .source = &libcSleepProvider,
 };
 
 test "Runtime.deinit() should deallocate all coroutines in the ready queue" {
@@ -153,7 +210,7 @@ test "Runtime.deinit() should deallocate all coroutines in the ready queue" {
             Coroutine.yield();
         }
     };
-    var rt: Runtime = try .init(std.testing.allocator, DefaultTimeProvider);
+    var rt: Runtime = try .initDefault(std.testing.allocator);
     try rt.spawn(T.testCoro, .{});
     try std.testing.expectEqual(1, rt.ready_queue.count);
     const stack = rt.ready_queue.head.?;
@@ -168,7 +225,7 @@ test "Runtime.deinit() should deallocate all coroutines in the wait queue" {
             Coroutine.sleepNanoseconds(1000);
         }
     };
-    var rt: Runtime = try .init(std.testing.allocator, DefaultTimeProvider);
+    var rt: Runtime = try .initDefault(std.testing.allocator);
     try rt.spawn(T.sleepCoro, .{});
     try rt.step();
     try std.testing.expectEqual(1, rt.wait_queue.getCount());
@@ -184,7 +241,7 @@ test "failed coroutines should stop the runtime, deallocate the failed coroutine
             return error.FailedCoroutinesShouldBeDeallocated;
         }
     };
-    var rt: Runtime = try .init(std.testing.allocator, DefaultTimeProvider);
+    var rt: Runtime = try .initDefault(std.testing.allocator);
     defer rt.deinit();
     try rt.spawnWithError(T.testCoro, .{});
     try std.testing.expectEqual(1, rt.ready_queue.count);
@@ -199,7 +256,7 @@ test "completed coroutines should be deallocated" {
     const T = struct {
         fn testCoro() void {}
     };
-    var rt: Runtime = try .init(std.testing.allocator, DefaultTimeProvider);
+    var rt: Runtime = try .initDefault(std.testing.allocator);
     defer rt.deinit();
     try rt.spawn(T.testCoro, .{});
     try std.testing.expectEqual(1, rt.ready_queue.count);
@@ -217,7 +274,7 @@ test "step() should not run continuations in the same cycle" {
             return error.NoContinuationsSameCycleTest;
         }
     };
-    var rt: Runtime = try .init(std.testing.allocator, DefaultTimeProvider);
+    var rt: Runtime = try .initDefault(std.testing.allocator);
     defer rt.deinit();
     try rt.spawnWithError(T.testCoro, .{});
     try rt.step();
@@ -235,7 +292,7 @@ test "step() should wake ready timer-waiting coroutines and run them" {
             Coroutine.sleepNanoseconds(1);
         }
     };
-    var rt: Runtime = try .init(std.testing.allocator, DefaultTimeProvider);
+    var rt: Runtime = try .initDefault(std.testing.allocator);
     defer rt.deinit();
     try rt.spawn(T.testCoro, .{});
     try std.testing.expectEqual(1, rt.ready_queue.count);
@@ -259,7 +316,7 @@ test "step() sleeping coroutines should be ignored until their timer expires" {
             Coroutine.yield();
         }
     };
-    var rt: Runtime = try .init(std.testing.allocator, DefaultTimeProvider);
+    var rt: Runtime = try .initDefault(std.testing.allocator);
     defer rt.deinit();
     try rt.spawn(T.sleepCoro, .{});
     try rt.spawn(T.activeCoro, .{});
@@ -297,7 +354,7 @@ test "run() drains all coroutine queues before returning" {
             Coroutine.yield();
         }
     };
-    var rt: Runtime = try .init(std.testing.allocator, DefaultTimeProvider);
+    var rt: Runtime = try .initDefault(std.testing.allocator);
     defer rt.deinit();
     try rt.spawn(T.sleepCoro, .{});
     try rt.spawn(T.activeCoro, .{});
@@ -321,7 +378,7 @@ test "run() halts execution and propagates failed coroutine errors to caller and
             side_effect_ptr.* = true;
         }
     };
-    var rt: Runtime = try .init(std.testing.allocator, DefaultTimeProvider);
+    var rt: Runtime = try .initDefault(std.testing.allocator);
     defer rt.deinit();
     try rt.spawnWithError(T.errorCoro, .{});
     try rt.spawn(T.deferredCoro, .{&side_effect});
@@ -333,5 +390,25 @@ test "run() halts execution and propagates failed coroutine errors to caller and
     try std.testing.expect(side_effect);
     try std.testing.expectEqual(0, rt.wait_queue.getCount());
     try std.testing.expectEqual(0, rt.ready_queue.count);
+}
+
+test "step() suspends the thread to wait for for coroutines in the wait queue when ready queue is empty" {
+    const sleep_time_ns = 300 * std.time.ns_per_s;
+    const T = struct {
+        fn sleepCoro() void {
+            Coroutine.sleepNanoseconds(sleep_time_ns);
+        }
+    };
+    var rt: Runtime = try .initDefault(std.testing.allocator);
+    defer rt.deinit();
+    try rt.spawn(T.sleepCoro, .{});
+    try rt.step();
+    try std.testing.expectEqual(1, rt.wait_queue.getCount());
+    try std.testing.expectEqual(0, rt.ready_queue.count);
+    try std.testing.expect(defaultTimeProviderNanosecondsCounter < 100);
+    try rt.step();
+    try std.testing.expectEqual(0, rt.wait_queue.getCount());
+    try std.testing.expectEqual(0, rt.ready_queue.count);
+    try std.testing.expect(defaultTimeProviderNanosecondsCounter >= sleep_time_ns);
 }
 
