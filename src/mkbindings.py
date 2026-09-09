@@ -18,6 +18,16 @@ BINDINGS = [
         ROOT / "sys" / "mman.zig",
         []
     ),
+    (
+        ROOT / "sys" / "socket.h",
+        ROOT / "sys" / "socket.zig",
+        []
+    ),
+    (
+        ROOT / "sys" / "event.h",
+        ROOT / "sys" / "event.zig",
+        []
+    ),
 ]
 
 @dataclass
