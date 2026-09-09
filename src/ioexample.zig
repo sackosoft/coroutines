@@ -13,33 +13,19 @@ pub fn main(init: std.process.Init) !void {
     var rt: Runtime = try .initDefault(init.gpa);
     defer rt.deinit();
 
-    const srvsock = socket.socket(
-        socket.PF_INET6,
-        socket.SOCK_STREAM | socket.SOCK_NONBLOCK | socket.SOCK_CLOEXEC,
-        0,
+    try rt.serve(
+        "::",
+        5200,
+        echoServer,
+        .{
+            .address_kind = .ip6,
+            .protocol = .tcp,
+        },
     );
-    if (srvsock < 0) {
-        print("Unable to open socket, errno={d}\n", .{errno()});
-        return error.Socket;
-    }
-    defer std.c.close(@intCast(srvsock));
-
-    const reuse_addr: c_int = 1;
-    var ret = undefined;
-    ret = socket.setsockopt(srvsock, socket.SOL_SOCKET, socket.SO_REUSEADDR, &reuse_addr, 1);
-    if (ret != 0) {
-        print("Unable to setsockopt(SO_REUSEADDR), errno={d}\n", .{errno()});
-        return error.SetSockOpt;
-    }
-
-    // TODO: Not sure how to initialize for ip6
-    const addr: socket.struct_sockaddr = undefined;
-
-    try rt.listen(srvsock, echo, .{});
     rt.run();
 }
 
-fn echo() !void {
+fn echoServer() !void {
     var buffer: [1024]u8 = undefined;
     const client_fd = Coroutine.arg0(std.c.fd_t);
     defer {

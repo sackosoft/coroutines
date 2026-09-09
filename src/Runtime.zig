@@ -71,6 +71,22 @@ pub fn run(this: *Runtime) !void {
     }
 }
 
+const ServeOptions = struct {
+    protocol: enum { tcp },
+    address_kind: enum { ip6 },
+};
+pub fn serve(rt: *Runtime, comptime addr: []const u8, port: u16, entrypoint: *const fn() anyerror!void, options: ServeOptions) !void {
+    _ = rt;
+    _ = addr;
+    _ = port;
+    _ = entrypoint;
+    if (options.protocol == .tcp and options.address_kind == .ip6) {
+
+    } else {
+        return error.NotYetSupported;
+    }
+}
+
 fn step(this: *Runtime) !void {
     var wait_queue_now = this.now();
     if (this.wait_queue.peek()) |upcoming| {
