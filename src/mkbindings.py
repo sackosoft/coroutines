@@ -28,6 +28,11 @@ BINDINGS = [
         ROOT / "sys" / "event.zig",
         []
     ),
+    (
+        ROOT / "arpa" / "inet.h",
+        ROOT / "arpa" / "inet.zig",
+        []
+    ),
 ]
 
 @dataclass
