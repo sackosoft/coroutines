@@ -33,6 +33,11 @@ BINDINGS = [
         ROOT / "arpa" / "inet.zig",
         []
     ),
+    (
+        ROOT / "netinet" / "in.h",
+        ROOT / "netinet" / "in.zig",
+        []
+    ),
 ]
 
 @dataclass
