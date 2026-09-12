@@ -3,7 +3,7 @@ const std = @import("std");
 const assert = std.debug.assert;
 
 const cpu = @import("builtin").target.cpu.arch;
-const backend = switch (cpu) {
+const Backend = switch (cpu) {
     .x86_64 => @import("arch_x86_64.zig"),
     else => @compileError("Unsupported target CPU architecture: " ++ @tagName(cpu)),
 };
@@ -22,14 +22,14 @@ stack: Stack,
 pub fn create(f: *const fn() void, args: anytype, options: CoroutineOptions) !Stack {
     validateArgs(args);
     const stack = try createStack(options);
-    backend.setupBaseStackFrame(stack, f, args);
+    Backend.setupBaseStackFrame(stack, f, args);
     return stack;
 }
 
 pub fn createWithError(f: *const fn() anyerror!void, args: anytype, options: CoroutineOptions) !Stack {
     validateArgs(args);
     const stack = try createStack(options);
-    backend.setupBaseStackFrameWithError(stack, f, args);
+    Backend.setupBaseStackFrameWithError(stack, f, args);
     return stack;
 }
 
@@ -57,22 +57,22 @@ fn createStack(options: CoroutineOptions) !Stack {
 }
 
 pub fn yield() void {
-    const header = backend.locate_header();
+    const header = Backend.locate_header();
     assert(header.status == .running);
     header.status = .yielded;
     assert(header.ext_sp != null);
     assert(header.coro_sp == null);
-    backend.ctx_switch(&header.coro_sp, &header.ext_sp);
+    Backend.ctx_switch(&header.coro_sp, &header.ext_sp);
 }
 
 pub fn sleepNanoseconds(ns: u64) void {
-    const header = backend.locate_header();
+    const header = Backend.locate_header();
     assert(header.status == .running);
     header.status = .waiting;
     header.wait_info = .{ .fixed_interval_delay_in_ns = ns };
     assert(header.ext_sp != null);
     assert(header.coro_sp == null);
-    backend.ctx_switch(&header.coro_sp, &header.ext_sp);
+    Backend.ctx_switch(&header.coro_sp, &header.ext_sp);
 }
 
 pub fn enter(stack: Stack) StackHeader.Status {
@@ -85,7 +85,7 @@ pub fn enter(stack: Stack) StackHeader.Status {
     header.status = .running;
     assert(header.ext_sp == null);
     assert(header.coro_sp != null);
-    backend.ctx_switch(&header.ext_sp, &header.coro_sp);
+    Backend.ctx_switch(&header.ext_sp, &header.coro_sp);
     assert(header.status != .running);
     assert(header.status != .created);
     return header.status;
@@ -109,7 +109,7 @@ pub fn arg3(T: type) T {
 
 fn argInternal(T: type, index: usize) T {
     comptime assert(@sizeOf(T) <= @sizeOf(usize));
-    const header = backend.locate_header();
+    const header = Backend.locate_header();
     assert(index < header.args.len);
 
     return switch (@typeInfo(T)) {

@@ -8,8 +8,21 @@ const StackHeader = @import("StackHeader.zig");
 const IntrusiveStackList = @import("IntrusiveStackList.zig");
 const MinHeap = @import("MinHeap.zig");
 
+const os_tag = @import("builtin").target.os.tag;
+const Platform = switch (os_tag) {
+    .freebsd => @import("platform_freebsd.zig"),
+    else => @compileError("Unsupported host platform: " ++ @tagName(os_tag)),
+};
+
 const Runtime = @This();
 
+var runtime_counter: u16 = 0;
+
+/// Each instance of the runtime is assigned a unique runtime identifier. This identifier is used to ensure that
+/// objects such as registered socket listeners, which are associated with exactly one runtime, do not cross the
+/// runtime boundary or leak into a different runtime. For now, coroutines are not checked for runtime ownership,
+/// but they should be in debug builds.
+rid: u16,
 clock: TimeProvider,
 sleep_provider: SleepProvider,
 ready_queue: IntrusiveStackList,
@@ -20,7 +33,9 @@ pub fn init(
     clock: TimeProvider,
     sleep_provider: SleepProvider,
 ) !Runtime {
+    const rid = @atomicRmw(u16, &runtime_counter, .Add, 1, .monotonic);
     return .{
+        .rid = rid,
         .clock = clock,
         .sleep_provider = sleep_provider,
         .ready_queue = .{},
@@ -71,20 +86,79 @@ pub fn run(this: *Runtime) !void {
     }
 }
 
-const ServeOptions = struct {
-    protocol: enum { tcp },
-    address_kind: enum { ip6 },
-};
-pub fn serve(rt: *Runtime, comptime addr: []const u8, port: u16, entrypoint: *const fn() anyerror!void, options: ServeOptions) !void {
-    _ = rt;
-    _ = addr;
-    _ = port;
-    _ = entrypoint;
-    if (options.protocol == .tcp and options.address_kind == .ip6) {
 
-    } else {
-        return error.NotYetSupported;
+pub const TcpListener = packed struct(u64) {
+    fd: std.c.fd_t,
+    rid: u16,
+    kind: enum{TcpIp6},
+};
+pub const RuntimeSocketOpts = struct {
+    reuse_addr: bool = true,
+    ip6_only: bool = true,
+};
+pub fn listenTcpIp6(rt: *Runtime, port: u16, backlog: 128, options: RuntimeSocketOpts) !TcpListener {
+    const c = std.c;
+
+    var address: c.sockaddr.in6 = .{
+        .port = std.mem.nativeToBig(u16, port),
+        .flowinfo = 0,
+        .addr = @splat(0),
+        .scope_id = 0,
+    };
+
+    const fd = c.socket(
+        c.AF.INET6,
+        c.SOCK.STREAM | c.SOCK.NONBLOCK | c.SOCK.CLOEXEC,
+        c.IPPROTO.TCP,
+    );
+    if (fd < 0) {
+        return error.SocketCreate;
     }
+
+    var enabled: c_int = 1;
+
+    var ret: c_int = 0;
+    if (options.reuse_addr) {
+        ret = c.setsockopt(
+            fd,
+            c.SOL.SOCKET,
+            c.SO.REUSEADDR,
+            &enabled,
+            @sizeOf(c_int),
+        );
+        if (ret != 0) {
+            return error.SocketOptions;
+        }
+    }
+
+    if (options.ip6_only) {
+        ret = c.setsockopt(
+            fd,
+            c.IPPROTO.IPV6,
+            c.IPV6.V6ONLY,
+            &enabled,
+            @sizeOf(c_int),
+        );
+        if (ret != 0) {
+            return error.SocketOptions;
+        }
+    }
+
+    ret = c.bind(fd, @ptrCast(&address), @sizeOf(c.sockaddr.in6));
+    if (ret != 0) {
+        return error.SocketBind;
+    }
+
+    ret = c.listen(fd, 128);
+    if (ret != 0) {
+        return error.SocketListen;
+    }
+
+    return .{
+        .fd = fd,
+        .kind = .TcpIp6,
+        .rid = rt.rid,
+    };
 }
 
 fn step(this: *Runtime) !void {
