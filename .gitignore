@@ -1,7 +1,3 @@
-main
-main.core
-va
-va.core
-test.core
+*.core
 zig-out/
 
