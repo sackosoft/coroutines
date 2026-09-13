@@ -9,10 +9,10 @@ const IntrusiveStackList = @import("IntrusiveStackList.zig");
 const MinHeap = @import("MinHeap.zig");
 
 const os_tag = @import("builtin").target.os.tag;
-const Platform = switch (os_tag) {
-    .freebsd => @import("platform_freebsd.zig"),
-    else => @compileError("Unsupported host platform: " ++ @tagName(os_tag)),
-};
+// const Platform = switch (os_tag) {
+    // .freebsd => @import("platform_freebsd.zig"),
+    // else => @compileError("Unsupported host platform: " ++ @tagName(os_tag)),
+// };
 
 const Runtime = @This();
 
@@ -149,7 +149,7 @@ pub fn listenTcpIp6(rt: *Runtime, port: u16, backlog: 128, options: RuntimeSocke
         return error.SocketBind;
     }
 
-    ret = c.listen(fd, 128);
+    ret = c.listen(fd, backlog);
     if (ret != 0) {
         return error.SocketListen;
     }
