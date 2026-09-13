@@ -38,6 +38,11 @@ BINDINGS = [
         ROOT / "netinet" / "in.zig",
         []
     ),
+    (
+        ROOT / "unistd.h",
+        ROOT / "unistd.zig",
+        []
+    ),
 ]
 
 @dataclass

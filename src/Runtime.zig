@@ -9,10 +9,10 @@ const IntrusiveStackList = @import("IntrusiveStackList.zig");
 const MinHeap = @import("MinHeap.zig");
 
 const os_tag = @import("builtin").target.os.tag;
-// const Platform = switch (os_tag) {
-    // .freebsd => @import("platform_freebsd.zig"),
-    // else => @compileError("Unsupported host platform: " ++ @tagName(os_tag)),
-// };
+const Platform = switch (os_tag) {
+    .freebsd => @import("platform_freebsd.zig"),
+    else => @compileError("Unsupported host platform: " ++ @tagName(os_tag)),
+};
 
 const Runtime = @This();
 
@@ -27,6 +27,7 @@ clock: TimeProvider,
 sleep_provider: SleepProvider,
 ready_queue: IntrusiveStackList,
 wait_queue: MinHeap,
+platform: Platform,
 
 pub fn init(
     alloc: std.mem.Allocator,
@@ -40,6 +41,7 @@ pub fn init(
         .sleep_provider = sleep_provider,
         .ready_queue = .{},
         .wait_queue = try .init(alloc, 8_192),
+        .platform = try .init(),
     };
 }
 
@@ -48,6 +50,8 @@ pub fn initDefault(alloc: std.mem.Allocator) !Runtime {
 }
 
 pub fn deinit(this: *Runtime) void {
+    this.platform.deinit();
+
     var stack: Stack = undefined;
     while (this.wait_queue.popMin(&stack)) {
         stack.destroy();
@@ -161,14 +165,26 @@ pub fn listenTcpIp6(rt: *Runtime, port: u16, backlog: 128, options: RuntimeSocke
     };
 }
 
+fn durationUntilNextWaitQueueItem(this: *Runtime, current_now: std.Io.Timestamp) i96 {
+    if (this.wait_queue.peek()) |upcoming| {
+        const until_upcoming = current_now.durationTo(upcoming);
+        return until_upcoming;
+    }
+
+    return 0;
+}
+
 fn step(this: *Runtime) !void {
     var wait_queue_now = this.now();
-    if (this.wait_queue.peek()) |upcoming| {
-        const until_upcoming = wait_queue_now.durationTo(upcoming);
-        if (this.ready_queue.count == 0 and until_upcoming.nanoseconds > 0) {
-            try this.sleep(until_upcoming.nanoseconds);
-            wait_queue_now = this.now();
+    const wait_queue_timeout = this.durationUntilNextWaitQueueItem();
+
+    if (this.ready_queue.count == 0) {
+        var completions = try this.platform.dequeueCompletions(wait_queue_timeout);
+        while (completions.next()) |kevent| {
+            // TODO: Update ready queue with stuff from completed events
         }
+
+        wait_queue_now = this.now();
     }
 
     var stack: Stack = undefined;
