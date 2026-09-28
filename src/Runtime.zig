@@ -41,7 +41,7 @@ pub fn init(
         .sleep_provider = sleep_provider,
         .ready_queue = .{},
         .wait_queue = try .init(alloc, 8_192),
-        .platform = try .init(),
+        .platform = try .init(alloc),
     };
 }
 
@@ -168,7 +168,7 @@ pub fn listenTcpIp6(rt: *Runtime, port: u16, backlog: 128, options: RuntimeSocke
 fn durationUntilNextWaitQueueItem(this: *Runtime, current_now: std.Io.Timestamp) i96 {
     if (this.wait_queue.peek()) |upcoming| {
         const until_upcoming = current_now.durationTo(upcoming);
-        return until_upcoming;
+        return until_upcoming.nanoseconds;
     }
 
     return 0;
@@ -176,12 +176,13 @@ fn durationUntilNextWaitQueueItem(this: *Runtime, current_now: std.Io.Timestamp)
 
 fn step(this: *Runtime) !void {
     var wait_queue_now = this.now();
-    const wait_queue_timeout = this.durationUntilNextWaitQueueItem();
+    const wait_queue_timeout = this.durationUntilNextWaitQueueItem(wait_queue_now);
 
     if (this.ready_queue.count == 0) {
         var completions = try this.platform.dequeueCompletions(wait_queue_timeout);
         while (completions.next()) |kevent| {
             // TODO: Update ready queue with stuff from completed events
+            _ = kevent;
         }
 
         wait_queue_now = this.now();

@@ -17,14 +17,12 @@ pub fn init(alloc: std.mem.Allocator) !Platform {
         return error.KQueueCreate;
     }
 
-    const platform = .{
+    return .{
         .alloc = alloc,
         .kq = kq,
         .change_list = try alloc.alloc(std.c.Kevent, kevent_list_width),
         .event_list = try alloc.alloc(std.c.Kevent, kevent_list_width),
     };
-
-    return platform;
 }
 
 pub fn deinit(this: *Platform) void {
@@ -48,13 +46,13 @@ pub const CompletionIterator = struct {
 pub fn dequeueCompletions(this: *Platform, timeout_nanoseconds: i96) !CompletionIterator {
     const timeout: std.c.timespec = .{
         .sec = @intCast(@divTrunc(timeout_nanoseconds, std.time.ns_per_s)),
-        .nsec = @intCast(timeout_nanoseconds % std.time.ns_per_s),
+        .nsec = @intCast(@mod(timeout_nanoseconds, std.time.ns_per_s)),
     };
     const ret = std.c.kevent(
         this.kq,
-        null,
+        this.change_list.ptr,
         0,
-        @ptrCast(this.change_list.ptr),
+        this.event_list.ptr,
         kevent_list_width,
         &timeout,
     );
@@ -62,8 +60,9 @@ pub fn dequeueCompletions(this: *Platform, timeout_nanoseconds: i96) !Completion
         return error.KEvent;
     }
 
+    const nevents: usize = @intCast(ret);
     return .{
         .index = 0,
-        .slice = this.event_list[0..ret],
+        .slice = this.event_list[0..nevents],
     };
 }
