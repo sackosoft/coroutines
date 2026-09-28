@@ -3,10 +3,11 @@ const std = @import("std");
 const assert = std.debug.assert;
 
 const Coroutine = @import("Coroutine.zig");
-const Stack = @import("Stack.zig");
-const StackHeader = @import("StackHeader.zig");
 const IntrusiveStackList = @import("IntrusiveStackList.zig");
 const MinHeap = @import("MinHeap.zig");
+const PlatformProvider = @import("PlatformProvider.zig");
+const Stack = @import("Stack.zig");
+const StackHeader = @import("StackHeader.zig");
 
 const os_tag = @import("builtin").target.os.tag;
 const Platform = switch (os_tag) {
@@ -33,20 +34,27 @@ pub fn init(
     alloc: std.mem.Allocator,
     clock: TimeProvider,
     sleep_provider: SleepProvider,
+    platform_provider: PlatformProvider,
 ) !Runtime {
     const rid = @atomicRmw(u16, &runtime_counter, .Add, 1, .monotonic);
     return .{
         .rid = rid,
         .clock = clock,
         .sleep_provider = sleep_provider,
+        .platform_provider = platform_provider,
         .ready_queue = .{},
         .wait_queue = try .init(alloc, 8_192),
-        .platform = try .init(alloc),
+        .platform = try .init(platform_provider, alloc),
     };
 }
 
 pub fn initDefault(alloc: std.mem.Allocator) !Runtime {
-    return try .init(alloc, DefaultTimeProvider, DefaultSleepProvider);
+    return try .init(
+        alloc,
+        DefaultTimeProvider,
+        DefaultSleepProvider,
+        DefaultPlatformProvider,
+    );
 }
 
 pub fn deinit(this: *Runtime) void {
@@ -180,12 +188,13 @@ fn step(this: *Runtime) !void {
 
     if (this.ready_queue.count == 0) {
         var completions = try this.platform.dequeueCompletions(wait_queue_timeout);
-        while (completions.next()) |kevent| {
-            // TODO: Update ready queue with stuff from completed events
-            _ = kevent;
+        if (completions.slice.len > 0) {
+            while (completions.next()) |kevent| {
+                // TODO: Update ready queue with stuff from completed events
+                _ = kevent;
+            }
+            wait_queue_now = this.now();
         }
-
-        wait_queue_now = this.now();
     }
 
     var stack: Stack = undefined;
@@ -310,6 +319,53 @@ pub const SyscallSleepProvider: SleepProvider = .{
     .context = null,
     .source = &libcSleepProvider,
 };
+
+const PlatformProviderContext = struct {
+    i: usize,
+    fds: [32]bool, // false == closed handle, true == opened handle
+};
+var pp_ctx: PlatformProviderContext = .{
+    .i = 0,
+    .fds = std.mem.zeroes([32]bool),
+};
+pub const DefaultPlatformProvider: PlatformProvider = .{
+    .ptr = &pp_ctx,
+    .vtable = .{
+        .kqueue = dummy_kqueue,
+        .kevent = dummy_kevent,
+        .close = dummy_close,
+    }
+};
+
+fn dummy_kqueue(ptr: *anyopaque) error.CreateFailed!i32 {
+    var ppc: *PlatformProviderContext = @ptrCast(ptr);
+    ppc.i += 1;
+    const kq = ppc.i;
+    ppc.fds[kq] = true;
+    return kq;
+}
+
+fn dummy_kevent(
+    ptr: *anyopaque,
+    kq: i32,
+    changelist: []const std.c.Kevent,
+    eventlist: []std.c.Kevent,
+    timeout_ns: i96,
+) error.Failed!u32 {
+    const ppc: *PlatformProviderContext = @ptrCast(ptr);
+    if (ppc.fds[kq] != true) {
+        return error.Failed;
+    }
+    _ = changelist;
+    _ = timeout_ns;
+    return eventlist[0..0];
+}
+
+fn dummy_close(ptr: *anyopaque, fd: i32) void {
+    var ppc: *PlatformProviderContext = @ptrCast(ptr);
+    assert(ppc.fds[fd]);
+    ppc.fds[fd] = false;
+}
 
 test "Runtime.deinit() should deallocate all coroutines in the ready queue" {
     const T = struct {
