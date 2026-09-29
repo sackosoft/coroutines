@@ -41,7 +41,6 @@ pub fn init(
         .rid = rid,
         .clock = clock,
         .sleep_provider = sleep_provider,
-        .platform_provider = platform_provider,
         .ready_queue = .{},
         .wait_queue = try .init(alloc, 8_192),
         .platform = try .init(platform_provider, alloc),
@@ -330,19 +329,21 @@ var pp_ctx: PlatformProviderContext = .{
 };
 pub const DefaultPlatformProvider: PlatformProvider = .{
     .ptr = &pp_ctx,
-    .vtable = .{
+    .vtable = &.{
         .kqueue = dummy_kqueue,
         .kevent = dummy_kevent,
         .close = dummy_close,
     }
 };
 
-fn dummy_kqueue(ptr: *anyopaque) error.CreateFailed!i32 {
-    var ppc: *PlatformProviderContext = @ptrCast(ptr);
+fn dummy_kqueue(ptr: *anyopaque) error{CreateFailed}!i32 {
+    var ppc: *PlatformProviderContext = @ptrCast(@alignCast(ptr));
     ppc.i += 1;
     const kq = ppc.i;
     ppc.fds[kq] = true;
-    return kq;
+    assert(kq > 0);
+    assert(kq <= std.math.maxInt(i32));
+    return @intCast(kq);
 }
 
 fn dummy_kevent(
@@ -351,20 +352,24 @@ fn dummy_kevent(
     changelist: []const std.c.Kevent,
     eventlist: []std.c.Kevent,
     timeout_ns: i96,
-) error.Failed!u32 {
-    const ppc: *PlatformProviderContext = @ptrCast(ptr);
-    if (ppc.fds[kq] != true) {
+) error{Failed}!u32 {
+    const ppc: *PlatformProviderContext = @ptrCast(@alignCast(ptr));
+    assert(kq > 0);
+    if (ppc.fds[@as(usize, @intCast(kq))] != true) {
         return error.Failed;
     }
     _ = changelist;
     _ = timeout_ns;
-    return eventlist[0..0];
+    _ = eventlist;
+    return 0;
 }
 
 fn dummy_close(ptr: *anyopaque, fd: i32) void {
-    var ppc: *PlatformProviderContext = @ptrCast(ptr);
-    assert(ppc.fds[fd]);
-    ppc.fds[fd] = false;
+    var ppc: *PlatformProviderContext = @ptrCast(@alignCast(ptr));
+    assert(fd > 0);
+    const index: usize = @intCast(fd);
+    assert(ppc.fds[index]);
+    ppc.fds[index] = false;
 }
 
 test "Runtime.deinit() should deallocate all coroutines in the ready queue" {

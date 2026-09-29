@@ -24,7 +24,7 @@ pub fn init(pp: PlatformProvider, alloc: std.mem.Allocator) !Platform {
     };
 }
 
-pub fn deinit(this: *Platform) void {
+pub fn deinit(this: Platform) void {
     this.pp.close(this.kq);
     this.alloc.free(this.change_list);
     this.alloc.free(this.event_list);

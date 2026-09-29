@@ -19,41 +19,40 @@ ptr: *anyopaque,
 vtable: *const VTable,
 
 pub const VTable = struct {
-    kqueue: *const fn (ptr: *anyopaque) error.CreateFailed!i32,
+    kqueue: *const fn (ptr: *anyopaque) error{CreateFailed}!i32,
     kevent: *const fn(
         ptr: *anyopaque,
         kq: i32,
         changelist: []const Kevent,
         eventlist: []Kevent,
         timeout_ns: i96,
-    ) error.Failed!u32,
+    ) error{Failed}!u32,
     close: *const fn(ptr: *anyopaque, fd: i32) void,
 };
 
-pub inline fn kqueue(this: *PlatformProvider) error.CreateFailed!i32 {
+pub inline fn kqueue(this: *const PlatformProvider) error{CreateFailed}!i32 {
     return this.vtable.kqueue(this.ptr);
 }
 
 pub inline fn kevent(
-    this: *PlatformProvider,
+    this: *const PlatformProvider,
     kq: i32,
     changelist: []const Kevent,
     eventlist: []Kevent,
     timeout_ns: i96,
-) error.Failed![]Kevent {
+) error{Failed}![]Kevent {
     const ret = try this.vtable.kevent(
         this.ptr,
         kq,
-        changelist.ptr,
-        changelist.len,
-        eventlist.ptr,
-        eventlist.len,
+        changelist,
+        eventlist,
         timeout_ns,
     );
+    assert(ret <= eventlist.len);
     return eventlist[0..ret];
 }
 
-pub inline fn close(this: *PlatformProvider, fd: i32) void {
+pub inline fn close(this: *const PlatformProvider, fd: i32) void {
     return this.vtable.close(this.ptr, fd);
 }
 
