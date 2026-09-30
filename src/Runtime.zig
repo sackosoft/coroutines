@@ -47,7 +47,8 @@ pub fn init(
     };
 }
 
-pub fn initDefault(alloc: std.mem.Allocator) !Runtime {
+fn initDefault(alloc: std.mem.Allocator) !Runtime {
+    defaultTimeProviderNanosecondsCounter = 0;
     return try .init(
         alloc,
         DefaultTimeProvider,
@@ -192,8 +193,8 @@ fn step(this: *Runtime) !void {
                 // TODO: Update ready queue with stuff from completed events
                 _ = kevent;
             }
-            wait_queue_now = this.now();
         }
+        wait_queue_now = this.now();
     }
 
     var stack: Stack = undefined;
@@ -286,10 +287,10 @@ pub const DefaultTimeProvider: TimeProvider = .{
 };
 
 fn counterSleepProvider(context: ?*anyopaque, duration: std.Io.Duration) error{SleepInterrupted}!void {
-    _ = context;
-    const nanosecondsCounter: *i64 = &defaultTimeProviderNanosecondsCounter;
+    assert(context != null);
+    const nanosecondsCounter: *i64 = @ptrCast(@alignCast(context.?));
     assert(duration.nanoseconds < std.math.maxInt(i64));
-    nanosecondsCounter.* += @intCast(duration.nanoseconds);
+    nanosecondsCounter.* += @as(i64, @intCast(duration.nanoseconds));
 }
 pub const DefaultSleepProvider: SleepProvider = .{
     .context = &defaultTimeProviderNanosecondsCounter,
@@ -322,10 +323,12 @@ pub const SyscallSleepProvider: SleepProvider = .{
 const PlatformProviderContext = struct {
     i: usize,
     fds: [32]bool, // false == closed handle, true == opened handle
+    clock: *i64,
 };
 var pp_ctx: PlatformProviderContext = .{
     .i = 0,
     .fds = std.mem.zeroes([32]bool),
+    .clock = &defaultTimeProviderNanosecondsCounter,
 };
 pub const DefaultPlatformProvider: PlatformProvider = .{
     .ptr = &pp_ctx,
@@ -358,8 +361,11 @@ fn dummy_kevent(
     if (ppc.fds[@as(usize, @intCast(kq))] != true) {
         return error.Failed;
     }
+
+    // TODO: Make the wait behavior conditional on how many results are avaialble.
+    ppc.clock.* += @intCast(timeout_ns);
+
     _ = changelist;
-    _ = timeout_ns;
     _ = eventlist;
     return 0;
 }
@@ -561,7 +567,7 @@ test "run() halts execution and propagates failed coroutine errors to caller and
 }
 
 test "step() suspends the thread to wait for for coroutines in the wait queue when ready queue is empty" {
-    const sleep_time_ns = 300 * std.time.ns_per_s;
+    const sleep_time_ns = 300;
     const T = struct {
         fn sleepCoro() void {
             Coroutine.sleepNanoseconds(sleep_time_ns);
@@ -573,7 +579,7 @@ test "step() suspends the thread to wait for for coroutines in the wait queue wh
     try rt.step();
     try std.testing.expectEqual(1, rt.wait_queue.getCount());
     try std.testing.expectEqual(0, rt.ready_queue.count);
-    try std.testing.expect(defaultTimeProviderNanosecondsCounter < 100);
+    try std.testing.expect(defaultTimeProviderNanosecondsCounter < 10);
     try rt.step();
     try std.testing.expectEqual(0, rt.wait_queue.getCount());
     try std.testing.expectEqual(0, rt.ready_queue.count);
