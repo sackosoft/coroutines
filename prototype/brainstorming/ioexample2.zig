@@ -28,13 +28,15 @@ fn acceptAndDispatch() !void {
     const tcpListener = Coroutine.arg1(*TcpListener);
 
     while (true) {
-        // How should the suspention happen? Ultimately, it will need to be a yield + one time registration in the io
-        // reactor. Then resumed by the runtime when that registration has an event. Should the TcpListener already
-        // be registered in the runtime? That makes sense to me, but there is no association with the Coroutine in that
-        // code path. So then I need something like `rt.accept(tcpListener, acceptAndDispatch, .{&rt})` as a different
-        // kind of `spawn`. It will have the same problem, though, the function handle is not a coroutine. That leads
-        // me back to this location where we need a way to ask the runtime to do the registration and suspend us until
-        // the event occurs.
+        // How should the suspention happen? Ultimately, it will need to be a yield
+        // + one time registration in the io reactor. Then resumed by the runtime
+        // when that registration has an event. Should the TcpListener already be
+        // registered in the runtime? That makes sense to me, but there is no association
+        // with the Coroutine in that code path. So then I need something like `rt.accept(tcpListener,
+        // acceptAndDispatch, .{&rt})` as a different kind of `spawn`. It will have
+        // the same problem, though, the function handle is not a coroutine. That
+        // leads me back to this location where we need a way to ask the runtime to
+        // do the registration and suspend us until the event occurs.
         const connection = rt.accept(tcpListener);
         try rt.spawnWithError(echo, .{connection});
     }
